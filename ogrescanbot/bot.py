@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-
+import os
 from aiogram import Bot, Dispatcher, F
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
@@ -176,6 +176,6 @@ async def create_webhook_app(settings: Settings) -> web.Application:
 def main() -> None:
     settings = load_settings()
     if settings.run_mode == "webhook":
-        web.run_app(create_webhook_app(settings), host=settings.host, port=settings.port)
+        web.run_app(create_webhook_app(settings), host=settings.host, port=int(os.environ.get'PORT',10000)
     else:
         asyncio.run(run_polling(settings))
