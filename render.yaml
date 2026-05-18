@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: ogrescanbot
+    runtime: docker
+    plan: free
+    envVars:
+      - key: RUN_MODE
+        value: webhook
+      - key: HOST
+        value: 0.0.0.0
+      - key: PORT
+        value: 8080
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: WEBHOOK_URL
+        sync: false
+      - key: BOT_NAME
+        value: OgreScanBot
+      - key: DATABASE_PATH
+        value: ogrescanbot.sqlite3
+      - key: ENABLE_RUGCHECK
+        value: true

@@ -1,0 +1,2 @@
+"""OgreScanBot package."""
+
