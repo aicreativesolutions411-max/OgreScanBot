@@ -49,6 +49,9 @@ class DexscreenerClient:
             buys_h1=_int_or_none(txns_h1.get("buys")),
             sells_h1=_int_or_none(txns_h1.get("sells")),
             created_at_ms=_int_or_none(pair.get("pairCreatedAt")),
+            image_url=_string_or_none(info.get("imageUrl")),
+            header_url=_string_or_none(info.get("header")),
+            description=_string_or_none(info.get("description")),
             socials=info.get("socials") or [],
             websites=info.get("websites") or [],
             raw_pair=pair,
@@ -87,3 +90,10 @@ def _int_or_none(value: object) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _string_or_none(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None

@@ -23,6 +23,9 @@ class TokenScan:
     buys_h1: int | None
     sells_h1: int | None
     created_at_ms: int | None
+    image_url: str | None
+    header_url: str | None
+    description: str | None
     socials: list[dict[str, Any]]
     websites: list[dict[str, Any]]
     raw_pair: dict[str, Any]

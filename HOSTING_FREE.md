@@ -52,6 +52,8 @@ WEBHOOK_URL=https://your-render-service.onrender.com
 WEBHOOK_PATH=/telegram/webhook
 ```
 
+Do not hardcode the Render port in `bot.py`. Render provides a `PORT` environment variable automatically, and OgreScanBot already reads it through `settings.port`.
+
 Important: Render free web services should not be treated like production. They can sleep, and local SQLite files may not survive redeploys the way you expect.
 
 ## Not recommended for this goal

@@ -27,12 +27,14 @@ def format_scan(token: TokenScan, call: CallRecord | None, is_new_call: bool, ru
 
     socials = social_links(token)
     rug_text = format_rug(rug)
+    meta_text = format_metadata(token)
 
     return (
         f"<b>OgreScanBot</b>\n\n"
         f"<b>{title}</b>\n"
         f"<code>{ca}</code>\n"
         f"|- #SOL | {html.escape(token.dex_id)} | {age_from_ms(token.created_at_ms)}\n\n"
+        f"{meta_text}"
         f"<b>Stats</b>\n"
         f"|- USD     <b>{price(token.price_usd)}</b> ({pct(token.price_change_h24)} 24h)\n"
         f"|- MC      <b>{money(token.market_cap)}</b>\n"
@@ -137,6 +139,22 @@ def social_links(token: TokenScan) -> str:
         if url:
             links.append(f"<a href=\"{html.escape(str(url))}\">{html.escape(str(label))}</a>")
     return " | ".join(links) if links else "none found"
+
+
+def format_metadata(token: TokenScan) -> str:
+    lines: list[str] = []
+    if token.description:
+        description = " ".join(token.description.split())
+        if len(description) > 220:
+            description = f"{description[:217]}..."
+        lines.append(f"|- Info    {html.escape(description)}")
+    if token.image_url:
+        lines.append(f"|- Image   <a href=\"{html.escape(token.image_url)}\">token pic</a>")
+    if token.header_url:
+        lines.append(f"|- Header  <a href=\"{html.escape(token.header_url)}\">banner</a>")
+    if not lines:
+        return ""
+    return "<b>Metadata</b>\n" + "\n".join(lines) + "\n\n"
 
 
 def format_rug(rug: RugSummary | None) -> str:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
+
 from aiogram import Bot, Dispatcher, F
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
@@ -142,10 +142,18 @@ class OgreScanApp:
             call, is_new_call = None, False
 
         rug = await self.rug.summary(token.address) if self.rug else None
-        await message.reply(
-            format_scan(token, call, is_new_call, rug),
-            disable_web_page_preview=False,
-        )
+        scan_text = format_scan(token, call, is_new_call, rug)
+        if token.image_url:
+            try:
+                if len(scan_text) <= 1000:
+                    await message.reply_photo(token.image_url, caption=scan_text)
+                else:
+                    await message.reply_photo(token.image_url, caption=f"{token.name} (${token.symbol})")
+                    await message.reply(scan_text, disable_web_page_preview=False)
+                return
+            except Exception:
+                logging.exception("Telegram rejected token image URL: %s", token.image_url)
+        await message.reply(scan_text, disable_web_page_preview=False)
 
 
 def command_args(message: Message) -> list[str]:
@@ -176,6 +184,6 @@ async def create_webhook_app(settings: Settings) -> web.Application:
 def main() -> None:
     settings = load_settings()
     if settings.run_mode == "webhook":
-        web.run_app( create_webhook_app(settings), host=settings.host,port=int(os.environ.get("PORT", 10000))),
+        web.run_app(create_webhook_app(settings), host=settings.host, port=settings.port)
     else:
         asyncio.run(run_polling(settings))
