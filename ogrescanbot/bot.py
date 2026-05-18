@@ -17,6 +17,7 @@ from .dexscreener import DexscreenerClient
 from .extract import extract_solana_addresses
 from .formatting import format_help, format_leaderboard, format_scan, user_display_name
 from .images import build_pnl_card
+from .pumpfun import PumpFunClient
 from .rugcheck import RugCheckClient
 
 
@@ -31,6 +32,7 @@ class OgreScanApp:
         self.db = Database(settings.database_path)
         self.dex = DexscreenerClient()
         self.rug = RugCheckClient() if settings.enable_rugcheck else None
+        self.pump = PumpFunClient() if settings.enable_pump_metadata else None
         self._register_handlers()
 
     async def start(self) -> None:
@@ -41,6 +43,8 @@ class OgreScanApp:
             await self.dex.close()
             if self.rug:
                 await self.rug.close()
+            if self.pump:
+                await self.pump.close()
             await self.db.close()
             await self.bot.session.close()
 
@@ -70,6 +74,8 @@ class OgreScanApp:
         await self.dex.close()
         if self.rug:
             await self.rug.close()
+        if self.pump:
+            await self.pump.close()
         await self.db.close()
         await self.bot.session.close()
 
@@ -108,6 +114,8 @@ class OgreScanApp:
         if not token:
             await message.reply("I could not find that Solana token on Dexscreener yet.")
             return
+        if self.pump:
+            token = token.with_pump_metadata(await self.pump.metadata(token.address))
 
         user = message.from_user
         if not user:
@@ -132,6 +140,8 @@ class OgreScanApp:
         if not token:
             await message.reply("I could not find that Solana token on Dexscreener yet.")
             return
+        if self.pump:
+            token = token.with_pump_metadata(await self.pump.metadata(token.address))
 
         user = message.from_user
         caller_id = user.id if user else 0
@@ -146,14 +156,18 @@ class OgreScanApp:
         if token.image_url:
             try:
                 if len(scan_text) <= 1000:
-                    await message.reply_photo(token.image_url, caption=scan_text)
+                    await message.reply_photo(token.image_url, caption=scan_text, show_caption_above_media=True)
                 else:
-                    await message.reply_photo(token.image_url, caption=f"{token.name} (${token.symbol})")
-                    await message.reply(scan_text, disable_web_page_preview=False)
+                    await message.reply_photo(
+                        token.image_url,
+                        caption=f"{token.name} (${token.symbol})",
+                        show_caption_above_media=True,
+                    )
+                    await message.reply(scan_text, disable_web_page_preview=True)
                 return
             except Exception:
                 logging.exception("Telegram rejected token image URL: %s", token.image_url)
-        await message.reply(scan_text, disable_web_page_preview=False)
+        await message.reply(scan_text, disable_web_page_preview=True)
 
 
 def command_args(message: Message) -> list[str]:

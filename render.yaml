@@ -18,3 +18,5 @@ services:
         value: ogrescanbot.sqlite3
       - key: ENABLE_RUGCHECK
         value: true
+      - key: ENABLE_PUMP_METADATA
+        value: true

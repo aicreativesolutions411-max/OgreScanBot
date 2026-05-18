@@ -11,6 +11,7 @@ class Settings:
     database_path: str
     min_multiple_for_hit: float
     enable_rugcheck: bool
+    enable_pump_metadata: bool
     run_mode: str
     webhook_url: str
     webhook_path: str
@@ -30,6 +31,7 @@ def load_settings() -> Settings:
         database_path=os.getenv("DATABASE_PATH", "ogrescanbot.sqlite3").strip() or "ogrescanbot.sqlite3",
         min_multiple_for_hit=float(os.getenv("MIN_MULTIPLE_FOR_HIT", "2.0")),
         enable_rugcheck=os.getenv("ENABLE_RUGCHECK", "true").lower() in {"1", "true", "yes", "on"},
+        enable_pump_metadata=os.getenv("ENABLE_PUMP_METADATA", "true").lower() in {"1", "true", "yes", "on"},
         run_mode=os.getenv("RUN_MODE", "polling").strip().lower() or "polling",
         webhook_url=os.getenv("WEBHOOK_URL", "").strip().rstrip("/"),
         webhook_path=os.getenv("WEBHOOK_PATH", "/telegram/webhook").strip() or "/telegram/webhook",

@@ -31,6 +31,7 @@ WEBHOOK_PATH=/telegram/webhook
 BOT_NAME=OgreScanBot
 DATABASE_PATH=ogrescanbot.sqlite3
 ENABLE_RUGCHECK=true
+ENABLE_PUMP_METADATA=true
 MIN_MULTIPLE_FOR_HIT=2.0
 ```
 

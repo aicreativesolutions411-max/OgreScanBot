@@ -1,56 +1,115 @@
 from __future__ import annotations
 
 from io import BytesIO
+from pathlib import Path
+from typing import TYPE_CHECKING
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
-from .db import CallRecord
-from .formatting import money
-from .models import TokenScan
+if TYPE_CHECKING:
+    from .db import CallRecord
+    from .models import TokenScan
+
+
+ASSET_DIR = Path(__file__).resolve().parent.parent / "assets"
+PNL_BACKGROUND = ASSET_DIR / "pnl_background_ogre.jpg"
 
 
 def build_pnl_card(token: TokenScan, call: CallRecord) -> BytesIO:
-    width, height = 1200, 630
-    image = Image.new("RGB", (width, height), "#07150f")
-    draw = ImageDraw.Draw(image)
+    width, height = 1280, 720
+    image = _load_background(width, height)
+    draw = ImageDraw.Draw(image, "RGBA")
 
-    for y in range(height):
-        green = int(18 + (y / height) * 28)
-        draw.line([(0, y), (width, y)], fill=(5, green, 18))
-
-    draw.rectangle((0, 0, width, height), outline="#19ff58", width=8)
-    draw.rounded_rectangle((55, 55, 1145, 575), radius=34, fill="#0b2117", outline="#1b5f35", width=3)
-
-    font_big = _font(120, bold=True)
-    font_title = _font(62, bold=True)
+    font_huge = _font(148, bold=True)
+    font_brand = _font(74, bold=True)
     font_mid = _font(44, bold=True)
-    font_small = _font(30)
+    font_small = _font(31, bold=True)
     font_tiny = _font(24)
 
     multiple = max(1.0, call.last_cap / call.initial_cap) if call.initial_cap else call.peak_multiple
 
-    draw.text((90, 92), "OGRE", fill="#f2fff4", font=font_title)
-    draw.text((90, 162), f"${token.symbol}", fill="#19ff58", font=font_mid)
-    draw.text((90, 220), token.name[:28], fill="#b8d9c1", font=font_small)
+    draw.rectangle((0, 0, width, height), outline="#06120d", width=10)
+    draw.rounded_rectangle((710, 54, 1228, 620), radius=22, fill=(0, 0, 0, 145), outline="#43ff62", width=3)
+    draw.rounded_rectangle((734, 76, 1204, 598), radius=18, outline="#0e5329", width=2)
 
-    draw.text((90, 320), f"{multiple:.2f}x", fill="#19ff58", font=font_big)
-    draw.text((92, 455), f"called at {money(call.initial_cap)}", fill="#f2fff4", font=font_mid)
-    draw.text((92, 510), f"now {money(call.last_cap)} by {call.caller_name}", fill="#b8d9c1", font=font_small)
+    draw.text((968, 126), "OGRE", fill="#ffffff", font=font_brand, anchor="mm")
+    draw.text((968, 190), f"called at {money(call.initial_cap)}", fill="#d8f5dd", font=font_small, anchor="mm")
 
-    draw.rounded_rectangle((760, 100, 1085, 425), radius=28, fill="#102a1d", outline="#246b3f", width=3)
-    draw.text((800, 135), "OGRESCAN", fill="#f2fff4", font=font_mid)
-    draw.text((800, 205), "CALL CARD", fill="#19ff58", font=font_small)
-    draw.text((800, 300), f"best {call.peak_multiple:.2f}x", fill="#f2fff4", font=font_mid)
-    draw.text((800, 360), "solana tracker", fill="#b8d9c1", font=font_tiny)
+    _glow_text(image, (968, 330), f"{multiple:.2f}x", font_huge)
+    draw = ImageDraw.Draw(image, "RGBA")
+    draw.text((968, 422), "PLAYER", fill="#69ff83", font=font_tiny, anchor="mm")
+    draw.text((968, 462), _shorten(call.caller_name, 20), fill="#f4fff6", font=font_mid, anchor="mm")
+    draw.text((968, 502), "TOKEN", fill="#69ff83", font=font_tiny, anchor="mm")
+    draw.text((968, 536), _shorten(f"{token.name} (${token.symbol})", 24), fill="#c4e6ca", font=font_small, anchor="mm")
+    draw.text((968, 580), f"now {money(call.last_cap)} | best {call.peak_multiple:.2f}x", fill="#69ff83", font=font_small, anchor="mm")
 
     short_ca = f"{token.address[:6]}...{token.address[-6:]}"
-    draw.text((760, 500), short_ca, fill="#789a84", font=font_tiny)
+    draw.rounded_rectangle((370, 646, 910, 696), radius=12, fill=(0, 0, 0, 135))
+    draw.text((640, 672), f"@OgreScanBot  |  {short_ca}", fill="#c4d8c7", font=font_tiny, anchor="mm")
 
     output = BytesIO()
-    image.save(output, format="PNG")
+    image.convert("RGB").save(output, format="PNG")
     output.seek(0)
     output.name = "ogrescan-pnl.png"
     return output
+
+
+def _load_background(width: int, height: int) -> Image.Image:
+    if not PNL_BACKGROUND.exists():
+        return Image.new("RGBA", (width, height), "#06120d")
+
+    source = Image.open(PNL_BACKGROUND).convert("RGB")
+    src_ratio = source.width / source.height
+    dst_ratio = width / height
+    if src_ratio > dst_ratio:
+        new_width = int(source.height * dst_ratio)
+        left = (source.width - new_width) // 2
+        source = source.crop((left, 0, left + new_width, source.height))
+    else:
+        new_height = int(source.width / dst_ratio)
+        top = (source.height - new_height) // 2
+        source = source.crop((0, top, source.width, top + new_height))
+
+    image = source.resize((width, height), Image.Resampling.LANCZOS)
+    image = ImageEnhance.Brightness(image).enhance(0.78)
+    image = ImageEnhance.Contrast(image).enhance(1.15)
+
+    overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    overlay_draw = ImageDraw.Draw(overlay)
+    overlay_draw.rectangle((0, 0, width, height), fill=(0, 20, 8, 58))
+    overlay_draw.rectangle((690, 0, width, height), fill=(0, 0, 0, 105))
+    return Image.alpha_composite(image.convert("RGBA"), overlay)
+
+
+def _glow_text(image: Image.Image, xy: tuple[int, int], text: str, font: ImageFont.ImageFont) -> None:
+    x, y = xy
+    for radius, fill in [(12, "#004b12"), (6, "#0b9f2d")]:
+        glow = Image.new("RGBA", image.size, (0, 0, 0, 0))
+        glow_draw = ImageDraw.Draw(glow)
+        glow_draw.text((x, y), text, fill=fill, font=font, anchor="mm")
+        glow = glow.filter(ImageFilter.GaussianBlur(radius))
+        image.alpha_composite(glow)
+    draw = ImageDraw.Draw(image)
+    draw.text((x, y), text, fill="#18ff43", font=font, anchor="mm")
+
+
+def money(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    if value >= 1_000_000_000:
+        return f"${value / 1_000_000_000:.2f}B"
+    if value >= 1_000_000:
+        return f"${value / 1_000_000:.2f}M"
+    if value >= 1_000:
+        return f"${value / 1_000:.1f}K"
+    return f"${value:.2f}"
+
+
+def _shorten(text: str, limit: int) -> str:
+    clean = " ".join(str(text).split())
+    if len(clean) <= limit:
+        return clean
+    return f"{clean[: max(0, limit - 3)]}..."
 
 
 def _font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:

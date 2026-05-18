@@ -10,16 +10,20 @@ Solana-first Telegram scanner bot using free/public data sources.
 - Tracks each chat separately.
 - Builds leaderboards based on the biggest X return from a single call.
 - Generates call-based PNL/flex cards with `/pnl <ca>` or `/flex <ca>`.
+- Pulls token metadata images/descriptions from Dexscreener and falls back to Pump.fun public metadata when available.
+- Adds quick links for BubbleMaps, RugCheck, Pump.fun, GMGN, DEX, and X searches for high-engagement recent posts.
 
 ## Free data sources
 
 - Telegram Bot API
 - Dexscreener public API
 - Optional RugCheck public report endpoint
+- Optional Pump.fun public metadata endpoint
 - Local SQLite database
 
 Dexscreener API reference: https://docs.dexscreener.com/api/reference
 RugCheck token report pattern: https://api.rugcheck.xyz/v1/tokens/{mint}/report
+Pump.fun metadata pattern: https://frontend-api-v3.pump.fun/coins/{mint}
 
 ## Setup
 
