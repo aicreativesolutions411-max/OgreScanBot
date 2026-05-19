@@ -161,11 +161,16 @@ class OgreScanApp:
         rug = await self.rug.summary(token.address) if self.rug else None
         scan_text = format_scan(token, call, is_new_call, rug)
         banner = await self.build_scan_photo(token)
-        await message.reply_photo(
-            banner,
-            caption=photo_caption(scan_text),
-            show_caption_above_media=False,
-        )
+        try:
+            await message.reply_photo(banner, caption=photo_caption(scan_text))
+        except Exception:
+            logging.exception("Full scan photo send failed; retrying with safe caption.")
+            safe_caption = safe_scan_caption(token, call)
+            try:
+                await message.reply_photo(banner, caption=safe_caption, parse_mode=None)
+            except Exception:
+                logging.exception("Safe scan photo send failed; falling back to text reply.")
+                await message.reply(safe_caption, parse_mode=None, disable_web_page_preview=True)
 
     async def build_scan_photo(self, token) -> BufferedInputFile:
         source = None
@@ -212,7 +217,7 @@ def first_token_query_from_message(message: Message) -> str | None:
     return queries[0] if queries else None
 
 
-def photo_caption(text: str, limit: int = 1000) -> str:
+def photo_caption(text: str, limit: int = 850) -> str:
     if len(text) <= limit:
         return text
 
@@ -227,10 +232,15 @@ def photo_caption(text: str, limit: int = 1000) -> str:
         if len(candidate) <= limit:
             return candidate
 
-    remaining = limit - len(footer) - len("\n\n...")
-    if remaining < 100:
-        return text[:limit]
-    return f"{body[:remaining].rstrip()}\n\n...{footer}"
+    lines: list[str] = []
+    for line in body.splitlines():
+        candidate = "\n".join(lines + [line]).rstrip() + footer
+        if len(candidate) > limit:
+            break
+        lines.append(line)
+    if lines:
+        return "\n".join(lines).rstrip() + footer
+    return strip_html(text)[:limit]
 
 
 def remove_section(text: str, heading: str) -> str:
@@ -254,6 +264,60 @@ def unique_urls(urls: list[str | None]) -> list[str]:
             clean.append(value)
             seen.add(value)
     return clean
+
+
+def safe_scan_caption(token, call) -> str:
+    cap = call.initial_cap if call else None
+    peak = call.peak_cap if call else None
+    best = call.peak_multiple if call else None
+    caller = call.caller_name if call else "unknown"
+    lines = [
+        "OgreScanBot",
+        f"{token.name} (${token.symbol})",
+        token.address,
+        f"#SOL | {token.dex_id}",
+        "",
+        "Stats",
+        f"USD: {token.price_usd or 'n/a'}",
+        f"MC: {plain_money(token.market_cap)}",
+        f"FDV: {plain_money(token.fdv)}",
+        f"Vol: {plain_money(token.volume_h24)}",
+        f"LP: {plain_money(token.liquidity_usd)}",
+        f"ATH: {plain_money(peak)} ({best:.2f}x)" if best else "ATH: n/a",
+        "",
+        f"Caller: {caller}",
+        f"Called at: {plain_money(cap)}",
+        "",
+        "Powered by Ogres",
+        "Telegram: https://t.me/ogrecoinonsol",
+        "Website: https://ogremode.com/",
+        "Twitter: https://twitter.com/i/communities/1930265213917425858",
+    ]
+    return "\n".join(lines)[:850]
+
+
+def plain_money(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    if value >= 1_000_000_000:
+        return f"${value / 1_000_000_000:.2f}B"
+    if value >= 1_000_000:
+        return f"${value / 1_000_000:.2f}M"
+    if value >= 1_000:
+        return f"${value / 1_000:.1f}K"
+    return f"${value:.2f}"
+
+
+def strip_html(text: str) -> str:
+    return (
+        text.replace("<b>", "")
+        .replace("</b>", "")
+        .replace("<code>", "")
+        .replace("</code>", "")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+    )
 
 
 def normalize_image_bytes(data: bytes) -> bytes | None:
