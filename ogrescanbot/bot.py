@@ -9,7 +9,7 @@ import time
 from aiogram import Bot, Dispatcher, F
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
-from aiogram.types import BufferedInputFile, Message
+from aiogram.types import BufferedInputFile, ChatMemberUpdated, Message
 from aiogram.client.default import DefaultBotProperties
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import ClientError, web
@@ -90,7 +90,11 @@ class OgreScanApp:
         await self.load_backup_chat_id_from_db()
         self.start_auto_backup_loop()
         webhook_endpoint = f"{self.settings.webhook_url}{self.settings.webhook_path}"
-        await self.bot.set_webhook(webhook_endpoint, drop_pending_updates=True)
+        await self.bot.set_webhook(
+            webhook_endpoint,
+            drop_pending_updates=True,
+            allowed_updates=self.dp.resolve_used_update_types(),
+        )
         logging.info("Webhook set to %s", webhook_endpoint)
 
     async def _on_webhook_cleanup(self, app: web.Application) -> None:
@@ -105,13 +109,14 @@ class OgreScanApp:
 
     def _register_handlers(self) -> None:
         self.dp.message.register(self.help_handler, Command("start", "help"))
-        self.dp.message.register(self.set_backup_channel_command, F.text.startswith(("/setbackup", "/backuphere")))
+        self.dp.message.register(self.set_backup_channel_command, lambda message: is_backup_command(message.text or ""))
         self.dp.message.register(self.scan_command, Command("scan"))
         self.dp.message.register(self.pnl_command, Command("pnl", "flex"))
         self.dp.message.register(self.leaderboard_command, Command("lb", "leaderboard"))
         self.dp.message.register(self.backup_command, Command("backup"))
         self.dp.message.register(self.auto_scan_message, F.text)
-        self.dp.channel_post.register(self.set_backup_channel_command, F.text.startswith(("/setbackup", "/backuphere")))
+        self.dp.channel_post.register(self.channel_post_text_handler, F.text)
+        self.dp.my_chat_member.register(self.maybe_auto_set_backup_channel)
 
     async def help_handler(self, message: Message) -> None:
         await message.reply(format_help(self.settings.bot_name), disable_web_page_preview=True)
@@ -201,6 +206,30 @@ class OgreScanApp:
             await message.answer("Restored calls and leaderboards from the pinned backup.")
         if self.db.conn:
             await self.backup_database()
+
+    async def channel_post_text_handler(self, message: Message) -> None:
+        if is_backup_command(message.text or ""):
+            await self.set_backup_channel_command(message)
+
+    async def maybe_auto_set_backup_channel(self, event: ChatMemberUpdated) -> None:
+        chat_type = getattr(event.chat.type, "value", event.chat.type)
+        status = getattr(event.new_chat_member.status, "value", event.new_chat_member.status)
+        if chat_type != "channel" or status not in {"administrator", "creator"}:
+            return
+        if self.backup_chat_id():
+            return
+
+        await self.save_backup_chat_id(str(event.chat.id))
+        self.start_auto_backup_loop()
+        try:
+            await self.bot.send_message(
+                event.chat.id,
+                f"OgreScanBot backup channel auto-set.\nChat ID: {event.chat.id}\nI will auto-backup here.",
+            )
+            if self.db.conn:
+                await self.backup_database()
+        except Exception:
+            logging.exception("Auto-set backup channel message failed.")
 
     async def scan_and_reply(self, message: Message, query: str) -> None:
         await message.bot.send_chat_action(message.chat.id, "typing")
@@ -450,6 +479,14 @@ def command_args(message: Message) -> list[str]:
 def first_token_query_from_message(message: Message) -> str | None:
     queries = extract_token_queries(message.text or message.caption or "")
     return queries[0] if queries else None
+
+
+def is_backup_command(text: str) -> bool:
+    command = text.strip().split(maxsplit=1)[0].lower()
+    return command in {
+        "/setbackup",
+        "/backuphere",
+    } or command.startswith("/setbackup@") or command.startswith("/backuphere@")
 
 
 def photo_caption(text: str, limit: int = 850) -> str:
