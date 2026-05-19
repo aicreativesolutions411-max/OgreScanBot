@@ -9,7 +9,7 @@ from aiogram.filters import Command
 from aiogram.types import BufferedInputFile, Message
 from aiogram.client.default import DefaultBotProperties
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
-from aiohttp import web
+from aiohttp import ClientError, web
 
 from .config import Settings, load_settings
 from .db import Database, period_to_since
@@ -162,17 +162,35 @@ class OgreScanApp:
 
         rug = await self.rug.summary(token.address) if self.rug else None
         scan_text = format_scan(token, call, is_new_call, rug)
-        if token.image_url:
+        image_url = token.image_url or token.header_url
+        if image_url:
             try:
+                image = await self.download_image(image_url)
+                photo = BufferedInputFile(image, filename="token-image.jpg") if image else image_url
                 await message.reply_photo(
-                    token.image_url,
+                    photo,
                     caption=photo_caption(scan_text),
                     show_caption_above_media=False,
                 )
                 return
             except Exception:
-                logging.exception("Telegram rejected token image URL: %s", token.image_url)
+                logging.exception("Telegram rejected token image: %s", image_url)
         await message.reply(scan_text, disable_web_page_preview=True)
+
+    async def download_image(self, url: str) -> bytes | None:
+        try:
+            async with self.dex._session.get(url) as response:
+                if response.status >= 400:
+                    return None
+                content_type = response.headers.get("content-type", "")
+                if "image" not in content_type.lower():
+                    return None
+                data = await response.read()
+        except ClientError:
+            return None
+        if not data or len(data) > 10_000_000:
+            return None
+        return data
 
 
 def command_args(message: Message) -> list[str]:
