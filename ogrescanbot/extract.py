@@ -51,3 +51,7 @@ def extract_ticker_queries(text: str | None) -> list[str]:
 
 def extract_token_queries(text: str | None) -> list[str]:
     return extract_solana_addresses(text) + extract_ticker_queries(text)
+
+
+def is_solana_address(value: str | None) -> bool:
+    return bool(value and SOLANA_ADDRESS_RE.fullmatch(value.strip()))

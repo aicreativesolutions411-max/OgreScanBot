@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import aiohttp
 
-from .models import TokenScan
+from .models import TokenScan, normalize_media_url
 
 
 DEX_API = "https://api.dexscreener.com"
@@ -25,7 +25,7 @@ class DexscreenerClient:
             return None
         pair = max(pairs, key=lambda item: float((item.get("liquidity") or {}).get("usd") or 0))
         base = pair.get("baseToken") or {}
-        info = pair.get("info") or {}
+        info = _merged_info(pair, pairs)
         txns_h1 = (pair.get("txns") or {}).get("h1") or {}
         price_change = pair.get("priceChange") or {}
         volume = pair.get("volume") or {}
@@ -49,8 +49,8 @@ class DexscreenerClient:
             buys_h1=_int_or_none(txns_h1.get("buys")),
             sells_h1=_int_or_none(txns_h1.get("sells")),
             created_at_ms=_int_or_none(pair.get("pairCreatedAt")),
-            image_url=_string_or_none(info.get("imageUrl")),
-            header_url=_string_or_none(info.get("header")),
+            image_url=normalize_media_url(_string_or_none(info.get("imageUrl"))),
+            header_url=normalize_media_url(_string_or_none(info.get("header"))),
             description=_string_or_none(info.get("description")),
             socials=info.get("socials") or [],
             websites=info.get("websites") or [],
@@ -97,3 +97,22 @@ def _string_or_none(value: object) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _merged_info(selected_pair: dict, pairs: list[dict]) -> dict:
+    selected = selected_pair.get("info") or {}
+    infos = [selected] + [pair.get("info") or {} for pair in pairs if pair is not selected_pair]
+    merged = dict(selected)
+    for key in ["imageUrl", "header", "description"]:
+        if not merged.get(key):
+            for info in infos:
+                if info.get(key):
+                    merged[key] = info.get(key)
+                    break
+    for key in ["socials", "websites"]:
+        if not merged.get(key):
+            for info in infos:
+                if info.get(key):
+                    merged[key] = info.get(key)
+                    break
+    return merged

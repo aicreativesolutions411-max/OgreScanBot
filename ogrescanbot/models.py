@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from dataclasses import replace
 from typing import Any
+from urllib.parse import urlparse
 
 
 @dataclass(frozen=True)
@@ -56,7 +57,7 @@ class TokenScan:
             self,
             name=self.name if self.name != "Unknown" else _clean_string(pump.get("name")) or self.name,
             symbol=self.symbol if self.symbol != "?" else _clean_string(pump.get("symbol")) or self.symbol,
-            image_url=self.image_url or _clean_string(pump.get("image_uri")),
+            image_url=self.image_url or normalize_media_url(_clean_string(pump.get("image_uri"))),
             description=self.description or _clean_string(pump.get("description")),
             socials=socials,
             websites=websites,
@@ -82,3 +83,19 @@ def _clean_string(value: object) -> str | None:
 
 def _has_url(items: list[dict[str, Any]], url: str) -> bool:
     return any(str(item.get("url", "")).strip().lower() == url.lower() for item in items)
+
+
+def normalize_media_url(url: str | None) -> str | None:
+    if not url:
+        return None
+    text = url.strip()
+    if text.startswith("ipfs://"):
+        return f"https://ipfs.io/ipfs/{text.removeprefix('ipfs://')}"
+    if text.startswith("ar://"):
+        return f"https://arweave.net/{text.removeprefix('ar://')}"
+    parsed = urlparse(text)
+    if parsed.scheme in {"http", "https"}:
+        return text
+    if text.startswith("Qm") or text.startswith("bafy"):
+        return f"https://ipfs.io/ipfs/{text}"
+    return text

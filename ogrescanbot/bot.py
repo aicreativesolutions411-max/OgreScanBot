@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from io import BytesIO
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.enums import ParseMode
@@ -10,11 +11,12 @@ from aiogram.types import BufferedInputFile, Message
 from aiogram.client.default import DefaultBotProperties
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import ClientError, web
+from PIL import Image, UnidentifiedImageError
 
 from .config import Settings, load_settings
 from .db import Database, period_to_since
 from .dexscreener import DexscreenerClient
-from .extract import extract_token_queries
+from .extract import extract_token_queries, is_solana_address
 from .formatting import format_help, format_leaderboard, format_scan, powered_by_footer, user_display_name
 from .images import build_pnl_card
 from .pumpfun import PumpFunClient
@@ -110,12 +112,10 @@ class OgreScanApp:
             await message.reply("Send /pnl followed by a Solana contract address or $ticker.")
             return
 
-        token = await self.dex.scan_solana_token(query)
+        token = await self.resolve_token(query)
         if not token:
-            await message.reply("I could not find that Solana token on Dexscreener yet.")
+            await message.reply("I could not find that Solana token on Dexscreener or Pump.fun yet.")
             return
-        if self.pump:
-            token = token.with_pump_metadata(await self.pump.metadata(token.address))
 
         user = message.from_user
         if not user:
@@ -145,12 +145,10 @@ class OgreScanApp:
 
     async def scan_and_reply(self, message: Message, query: str) -> None:
         await message.bot.send_chat_action(message.chat.id, "typing")
-        token = await self.dex.scan_solana_token(query)
+        token = await self.resolve_token(query)
         if not token:
-            await message.reply("I could not find that Solana token on Dexscreener yet.")
+            await message.reply("I could not find that Solana token on Dexscreener or Pump.fun yet.")
             return
-        if self.pump:
-            token = token.with_pump_metadata(await self.pump.metadata(token.address))
 
         user = message.from_user
         caller_id = user.id if user else 0
@@ -179,18 +177,25 @@ class OgreScanApp:
 
     async def download_image(self, url: str) -> bytes | None:
         try:
-            async with self.dex._session.get(url) as response:
+            async with self.dex._session.get(url, headers={"User-Agent": "OgreScanBot/1.0"}) as response:
                 if response.status >= 400:
-                    return None
-                content_type = response.headers.get("content-type", "")
-                if "image" not in content_type.lower():
                     return None
                 data = await response.read()
         except ClientError:
             return None
         if not data or len(data) > 10_000_000:
             return None
-        return data
+        return normalize_image_bytes(data)
+
+    async def resolve_token(self, query: str):
+        token = await self.dex.scan_solana_token(query)
+        if token and self.pump:
+            return token.with_pump_metadata(await self.pump.metadata(token.address))
+        if token:
+            return token
+        if self.pump and is_solana_address(query):
+            return await self.pump.scan_token(query)
+        return None
 
 
 def command_args(message: Message) -> list[str]:
@@ -235,6 +240,19 @@ def remove_section(text: str, heading: str) -> str:
     if end < 0:
         return text[:start].rstrip()
     return (text[:start] + text[end + 2 :]).strip()
+
+
+def normalize_image_bytes(data: bytes) -> bytes | None:
+    try:
+        image = Image.open(BytesIO(data))
+        image.thumbnail((1280, 1280))
+        if image.mode not in {"RGB", "L"}:
+            image = image.convert("RGB")
+        output = BytesIO()
+        image.save(output, format="JPEG", quality=88, optimize=True)
+        return output.getvalue()
+    except (OSError, UnidentifiedImageError):
+        return None
 
 
 async def run_polling(settings: Settings) -> None:
