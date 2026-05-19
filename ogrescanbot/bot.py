@@ -14,8 +14,8 @@ from aiohttp import web
 from .config import Settings, load_settings
 from .db import Database, period_to_since
 from .dexscreener import DexscreenerClient
-from .extract import extract_solana_addresses
-from .formatting import format_help, format_leaderboard, format_scan, user_display_name
+from .extract import extract_token_queries
+from .formatting import format_help, format_leaderboard, format_scan, powered_by_footer, user_display_name
 from .images import build_pnl_card
 from .pumpfun import PumpFunClient
 from .rugcheck import RugCheckClient
@@ -90,27 +90,27 @@ class OgreScanApp:
         await message.reply(format_help(self.settings.bot_name), disable_web_page_preview=True)
 
     async def scan_command(self, message: Message) -> None:
-        address = first_address_from_message(message)
-        if not address:
-            await message.reply("Send /scan followed by a Solana contract address or supported token link.")
+        query = first_token_query_from_message(message)
+        if not query:
+            await message.reply("Send /scan followed by a Solana contract address, supported token link, or $ticker.")
             return
-        await self.scan_and_reply(message, address)
+        await self.scan_and_reply(message, query)
 
     async def auto_scan_message(self, message: Message) -> None:
         text = message.text or ""
         if text.startswith("/"):
             return
-        address = first_address_from_message(message)
-        if address:
-            await self.scan_and_reply(message, address)
+        query = first_token_query_from_message(message)
+        if query:
+            await self.scan_and_reply(message, query)
 
     async def pnl_command(self, message: Message) -> None:
-        address = first_address_from_message(message)
-        if not address:
-            await message.reply("Send /pnl followed by a Solana contract address.")
+        query = first_token_query_from_message(message)
+        if not query:
+            await message.reply("Send /pnl followed by a Solana contract address or $ticker.")
             return
 
-        token = await self.dex.scan_solana_token(address)
+        token = await self.dex.scan_solana_token(query)
         if not token:
             await message.reply("I could not find that Solana token on Dexscreener yet.")
             return
@@ -125,18 +125,27 @@ class OgreScanApp:
         call, _ = await self.db.upsert_call(message.chat.id, token, user.id, user_display_name(user))
         card = build_pnl_card(token, call)
         photo = BufferedInputFile(card.getvalue(), filename=card.name)
-        await message.reply_photo(photo, caption=f"{token.symbol} call card | {call.peak_multiple:.2f}x best")
+        await message.reply_photo(
+            photo,
+            caption=f"{token.symbol} call card | {call.peak_multiple:.2f}x best{powered_by_footer()}",
+        )
 
     async def leaderboard_command(self, message: Message) -> None:
         args = command_args(message)
         period, since_ts = period_to_since(args[0] if args else "1w")
+        traders = await self.db.top_traders(
+            message.chat.id,
+            since_ts=since_ts,
+            min_hit_multiple=self.settings.min_multiple_for_hit,
+            limit=5,
+        )
         calls = await self.db.leaderboard(message.chat.id, since_ts=since_ts, limit=10)
         stats = await self.db.stats(message.chat.id, since_ts, self.settings.min_multiple_for_hit)
-        await message.reply(format_leaderboard(period, calls, stats), disable_web_page_preview=True)
+        await message.reply(format_leaderboard(period, traders, calls, stats), disable_web_page_preview=True)
 
-    async def scan_and_reply(self, message: Message, address: str) -> None:
+    async def scan_and_reply(self, message: Message, query: str) -> None:
         await message.bot.send_chat_action(message.chat.id, "typing")
-        token = await self.dex.scan_solana_token(address)
+        token = await self.dex.scan_solana_token(query)
         if not token:
             await message.reply("I could not find that Solana token on Dexscreener yet.")
             return
@@ -178,9 +187,9 @@ def command_args(message: Message) -> list[str]:
     return parts[1].split()
 
 
-def first_address_from_message(message: Message) -> str | None:
-    addresses = extract_solana_addresses(message.text or message.caption or "")
-    return addresses[0] if addresses else None
+def first_token_query_from_message(message: Message) -> str | None:
+    queries = extract_token_queries(message.text or message.caption or "")
+    return queries[0] if queries else None
 
 
 async def run_polling(settings: Settings) -> None:

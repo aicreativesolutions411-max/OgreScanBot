@@ -4,8 +4,13 @@ import html
 import time
 from urllib.parse import quote_plus
 
-from .db import CallRecord
+from .db import CallRecord, TraderRecord
 from .models import RugSummary, TokenScan
+
+
+OGRE_TELEGRAM_URL = "https://t.me/ogrecoinonsol"
+OGRE_WEBSITE_URL = "https://ogremode.com/"
+OGRE_TWITTER_URL = "https://twitter.com/i/communities/1930265213917425858"
 
 
 def user_display_name(user) -> str:
@@ -44,7 +49,8 @@ def format_scan(token: TokenScan, call: CallRecord | None, is_new_call: bool, ru
         f"├ FDV     <b>{money(token.fdv)}</b>\n"
         f"├ Vol     <b>{money(token.volume_h24)}</b>\n"
         f"├ LP      <b>{money(token.liquidity_usd)}</b>\n"
-        f"└ 1H      <b>{pct(token.price_change_h1)}</b> 🟢 {token.buys_h1 or 0} 🔴 {token.sells_h1 or 0}\n\n"
+        f"├ 1H      <b>{pct(token.price_change_h1)}</b> 🟢 {token.buys_h1 or 0} 🔴 {token.sells_h1 or 0}\n"
+        f"└ ATH     <b>{ath_value(call)}</b>\n\n"
         f"🔗 <b>Socials</b>\n"
         f"└ {socials}\n\n"
         f"🔎 <b>X Posts</b>\n"
@@ -53,29 +59,48 @@ def format_scan(token: TokenScan, call: CallRecord | None, is_new_call: bool, ru
         f"{rug_text}\n\n"
         f"{tools}"
         f"{call_line}"
+        f"{powered_by_footer()}"
     )
 
 
-def format_leaderboard(period: str, calls: list[CallRecord], stats: dict[str, float | int]) -> str:
-    rows = []
+def format_leaderboard(
+    period: str,
+    traders: list[TraderRecord],
+    calls: list[CallRecord],
+    stats: dict[str, float | int],
+) -> str:
+    trader_rows = []
     medals = ["1", "2", "3"]
+    for index, trader in enumerate(traders, start=1):
+        prefix = medals[index - 1] if index <= 3 else str(index)
+        trader_rows.append(
+            f"{prefix}. <b>{html.escape(trader.caller_name)}</b> "
+            f"[{trader.best_multiple:.2f}x] "
+            f"{trader.hits}/{trader.total_calls} hits"
+        )
+    trader_body = "\n".join(trader_rows) if trader_rows else "No traders tracked for this period yet."
+
+    call_rows = []
     for index, call in enumerate(calls, start=1):
         prefix = medals[index - 1] if index <= 3 else str(index)
-        rows.append(
+        call_rows.append(
             f"{prefix}. <b>{html.escape(call.token_symbol)}</b> by "
             f"{html.escape(call.caller_name)} [{call.peak_multiple:.2f}x]"
         )
-    body = "\n".join(rows) if rows else "No calls tracked for this period yet."
+    call_body = "\n".join(call_rows) if call_rows else "No calls tracked for this period yet."
     return (
         f"<b>Leaderboard</b>\n\n"
-        f"<b>Top Calls</b>\n"
-        f"{body}\n\n"
+        f"<b>Top Traders</b>\n"
+        f"{trader_body}\n\n"
+        f"<b>Best Trades</b>\n"
+        f"{call_body}\n\n"
         f"<b>Group Stats</b>\n"
         f"|- Period   <b>{html.escape(period)}</b>\n"
         f"|- Calls    <b>{int(stats['calls'])}</b>\n"
         f"|- Hit Rate <b>{int(stats['hit_rate'])}%</b>\n"
         f"|- Median   <b>{float(stats['median']):.2f}x</b>\n"
         f"|- Return   <b>{float(stats['return']):.2f}x</b>"
+        f"{powered_by_footer()}"
     )
 
 
@@ -85,10 +110,21 @@ def format_help(bot_name: str) -> str:
         "Paste a Solana CA or supported token link and I will scan it. "
         "The first paste in each chat becomes that chat's call.\n\n"
         "<b>Commands</b>\n"
-        "|- /scan &lt;ca or link&gt;\n"
-        "|- /pnl &lt;ca&gt;\n"
-        "|- /flex &lt;ca&gt;\n"
+        "|- /scan &lt;ca, link, or $ticker&gt;\n"
+        "|- /pnl &lt;ca or $ticker&gt;\n"
+        "|- /flex &lt;ca or $ticker&gt;\n"
+        "|- /leaderboard 1w\n"
         "|- /lb 1d | /lb 1w | /lb 30d | /lb all"
+        f"{powered_by_footer()}"
+    )
+
+
+def powered_by_footer() -> str:
+    return (
+        "\n\n<b>Powered by Ogres</b>\n"
+        f"<a href=\"{OGRE_TELEGRAM_URL}\">Telegram</a> • "
+        f"<a href=\"{OGRE_WEBSITE_URL}\">Website</a> • "
+        f"<a href=\"{OGRE_TWITTER_URL}\">Twitter</a>"
     )
 
 
@@ -118,6 +154,12 @@ def pct(value: float | None) -> str:
     if value is None:
         return "n/a"
     return f"{value:+.1f}%"
+
+
+def ath_value(call: CallRecord | None) -> str:
+    if not call:
+        return "n/a"
+    return f"{money(call.peak_cap)} ({call.peak_multiple:.2f}x)"
 
 
 def age_from_ms(created_at_ms: int | None) -> str:
@@ -163,12 +205,14 @@ def x_search_links(token: TokenScan) -> str:
     terms = [token.address]
     if token.symbol and token.symbol != "?":
         terms.append(f"${token.symbol}")
-    query = quote_plus(f"({' OR '.join(terms)}) min_faves:250 -filter:replies")
-    recent = f"https://x.com/search?q={query}&src=typed_query&f=live"
-    top = f"https://x.com/search?q={query}&src=typed_query&f=top"
+    base_query = " OR ".join(terms)
+    recent_query = quote_plus(base_query)
+    big_query = quote_plus(f"{base_query} min_faves:25")
+    recent = f"https://x.com/search?q={recent_query}&src=typed_query&f=live"
+    top = f"https://x.com/search?q={big_query}&src=typed_query&f=top"
     links = [
-        f"<a href=\"{html.escape(recent)}\">recent big</a>",
-        f"<a href=\"{html.escape(top)}\">top big</a>",
+        f"<a href=\"{html.escape(recent)}\">recent mentions</a>",
+        f"<a href=\"{html.escape(top)}\">big mentions</a>",
     ]
     if official:
         links.insert(0, f"<a href=\"{html.escape(official)}\">official X</a>")

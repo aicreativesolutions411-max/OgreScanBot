@@ -4,7 +4,7 @@ Solana-first Telegram scanner bot using free/public data sources.
 
 ## What it does
 
-- Auto-detects Solana contract addresses in group chats.
+- Auto-detects Solana contract addresses, supported token links, and `$ticker` mentions in group chats.
 - Scans tokens with Dexscreener.
 - Records the first caller for each token in each chat.
 - Tracks each chat separately.
@@ -45,10 +45,11 @@ python -m ogrescanbot
 ## Commands
 
 ```text
-/scan <solana_ca_or_link>
+/scan <solana_ca_or_link_or_$ticker>
 /pnl <solana_ca>
 /flex <solana_ca>
 /lb
+/leaderboard
 /lb 1d
 /lb 1w
 /lb 30d
@@ -58,6 +59,7 @@ python -m ogrescanbot
 ## Caller rules
 
 - First person to paste a token address or supported link in a chat owns that call for that chat.
+- First person to paste a `$ticker` that resolves to a Solana token also owns that call for that chat.
 - Every chat has its own call table and leaderboard.
 - Leaderboard ranking is by highest recorded multiplier on one call.
 - A hit is any call that reaches `MIN_MULTIPLE_FOR_HIT`, default `2.0x`.

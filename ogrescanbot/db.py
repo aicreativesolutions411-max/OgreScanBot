@@ -26,6 +26,16 @@ class CallRecord:
     updated_at: int
 
 
+@dataclass(frozen=True)
+class TraderRecord:
+    caller_user_id: int
+    caller_name: str
+    total_calls: int
+    best_multiple: float
+    avg_multiple: float
+    hits: int
+
+
 class Database:
     def __init__(self, path: str) -> None:
         self.path = path
@@ -157,6 +167,54 @@ class Database:
         await cursor.close()
         return [_row_to_call(row) for row in rows]
 
+    async def top_traders(
+        self,
+        chat_id: int,
+        since_ts: int | None = None,
+        min_hit_multiple: float = 2.0,
+        limit: int = 5,
+    ) -> list[TraderRecord]:
+        conn = self._conn()
+        if since_ts:
+            cursor = await conn.execute(
+                """
+                SELECT
+                    caller_user_id,
+                    caller_name,
+                    COUNT(*) AS total_calls,
+                    MAX(peak_multiple) AS best_multiple,
+                    AVG(peak_multiple) AS avg_multiple,
+                    SUM(CASE WHEN peak_multiple >= ? THEN 1 ELSE 0 END) AS hits
+                FROM calls
+                WHERE chat_id = ? AND created_at >= ?
+                GROUP BY caller_user_id, caller_name
+                ORDER BY best_multiple DESC, hits DESC, total_calls DESC
+                LIMIT ?
+                """,
+                (min_hit_multiple, chat_id, since_ts, limit),
+            )
+        else:
+            cursor = await conn.execute(
+                """
+                SELECT
+                    caller_user_id,
+                    caller_name,
+                    COUNT(*) AS total_calls,
+                    MAX(peak_multiple) AS best_multiple,
+                    AVG(peak_multiple) AS avg_multiple,
+                    SUM(CASE WHEN peak_multiple >= ? THEN 1 ELSE 0 END) AS hits
+                FROM calls
+                WHERE chat_id = ?
+                GROUP BY caller_user_id, caller_name
+                ORDER BY best_multiple DESC, hits DESC, total_calls DESC
+                LIMIT ?
+                """,
+                (min_hit_multiple, chat_id, limit),
+            )
+        rows = await cursor.fetchall()
+        await cursor.close()
+        return [_row_to_trader(row) for row in rows]
+
     async def stats(self, chat_id: int, since_ts: int | None, min_hit_multiple: float) -> dict[str, float | int]:
         conn = self._conn()
         params: tuple[int, ...] | tuple[int, int]
@@ -218,4 +276,15 @@ def _row_to_call(row: aiosqlite.Row) -> CallRecord:
         last_cap=float(row["last_cap"]),
         created_at=int(row["created_at"]),
         updated_at=int(row["updated_at"]),
+    )
+
+
+def _row_to_trader(row: aiosqlite.Row) -> TraderRecord:
+    return TraderRecord(
+        caller_user_id=int(row["caller_user_id"]),
+        caller_name=str(row["caller_name"]),
+        total_calls=int(row["total_calls"]),
+        best_multiple=float(row["best_multiple"]),
+        avg_multiple=float(row["avg_multiple"]),
+        hits=int(row["hits"]),
     )

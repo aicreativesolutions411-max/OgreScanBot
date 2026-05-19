@@ -5,6 +5,7 @@ from urllib.parse import unquote, urlparse
 
 
 SOLANA_ADDRESS_RE = re.compile(r"(?<![A-Za-z0-9])[1-9A-HJ-NP-Za-km-z]{32,44}(?![A-Za-z0-9])")
+TICKER_RE = re.compile(r"(?<![A-Za-z0-9_])\$([A-Za-z][A-Za-z0-9_]{1,20})(?![A-Za-z0-9_])")
 
 
 def extract_solana_addresses(text: str | None) -> list[str]:
@@ -32,3 +33,21 @@ def extract_solana_addresses(text: str | None) -> list[str]:
             unique.append(candidate)
             seen.add(candidate)
     return unique
+
+
+def extract_ticker_queries(text: str | None) -> list[str]:
+    if not text:
+        return []
+
+    candidates = [match.upper() for match in TICKER_RE.findall(unquote(text))]
+    seen: set[str] = set()
+    unique: list[str] = []
+    for candidate in candidates:
+        if candidate not in seen:
+            unique.append(candidate)
+            seen.add(candidate)
+    return unique
+
+
+def extract_token_queries(text: str | None) -> list[str]:
+    return extract_solana_addresses(text) + extract_ticker_queries(text)
