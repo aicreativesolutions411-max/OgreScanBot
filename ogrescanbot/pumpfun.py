@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import aiohttp
 
-from .models import TokenScan, normalize_media_url
+from .models import TokenScan, normalize_media_url, pump_bonding_progress_pct, pump_is_complete
 
 
 class PumpFunClient:
@@ -63,6 +63,9 @@ class PumpFunClient:
             socials=socials,
             websites=websites,
             raw_pair=data,
+            bonding_progress_pct=pump_bonding_progress_pct(data, cap),
+            is_pump_complete=pump_is_complete(data),
+            dex_paid=False,
         )
 
 

@@ -22,6 +22,10 @@ services:
         value: true
       - key: ENABLE_PUMP_METADATA
         value: true
+      - key: CALL_UPDATE_INTERVAL_SECONDS
+        value: 180
+      - key: CALL_UPDATE_LIMIT
+        value: 150
       - key: BACKUP_CHAT_ID
         sync: false
       - key: BACKUP_INTERVAL_SECONDS

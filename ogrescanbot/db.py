@@ -441,6 +441,34 @@ class Database:
         await cursor.close()
         return [int(row["chat_id"]) for row in rows]
 
+    async def tracked_calls(self, limit: int = 150) -> list[CallRecord]:
+        if self.backend == "postgres":
+            async with self._pool().acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT *
+                    FROM calls
+                    ORDER BY updated_at ASC, created_at ASC
+                    LIMIT $1
+                    """,
+                    limit,
+                )
+            return [_row_to_call(row) for row in rows]
+
+        conn = self._conn()
+        cursor = await conn.execute(
+            """
+            SELECT *
+            FROM calls
+            ORDER BY updated_at ASC, created_at ASC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        rows = await cursor.fetchall()
+        await cursor.close()
+        return [_row_to_call(row) for row in rows]
+
     async def set_setting(self, key: str, value: str) -> None:
         if self.backend == "postgres":
             async with self._pool().acquire() as conn:

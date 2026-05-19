@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 import logging
 from io import BytesIO
 from pathlib import Path
@@ -48,6 +49,7 @@ class OgreScanApp:
         self.pump = PumpFunClient() if settings.enable_pump_metadata else None
         self.last_backup_at = 0.0
         self.backup_task: asyncio.Task | None = None
+        self.call_tracker_task: asyncio.Task | None = None
         self.learned_backup_chat_id = ""
         self._register_handlers()
 
@@ -56,9 +58,11 @@ class OgreScanApp:
         await self.db.open()
         await self.load_backup_chat_id_from_db()
         self.start_auto_backup_loop()
+        self.start_call_tracker_loop()
         try:
             await self.dp.start_polling(self.bot)
         finally:
+            await self.stop_call_tracker_loop()
             await self.stop_auto_backup_loop()
             await self.dex.close()
             if self.rug:
@@ -89,6 +93,7 @@ class OgreScanApp:
         await self.db.open()
         await self.load_backup_chat_id_from_db()
         self.start_auto_backup_loop()
+        self.start_call_tracker_loop()
         webhook_endpoint = f"{self.settings.webhook_url}{self.settings.webhook_path}"
         await self.bot.set_webhook(
             webhook_endpoint,
@@ -98,6 +103,7 @@ class OgreScanApp:
         logging.info("Webhook set to %s", webhook_endpoint)
 
     async def _on_webhook_cleanup(self, app: web.Application) -> None:
+        await self.stop_call_tracker_loop()
         await self.stop_auto_backup_loop()
         await self.dex.close()
         if self.rug:
@@ -150,8 +156,10 @@ class OgreScanApp:
 
     async def pnl_command(self, message: Message) -> None:
         query = first_token_query_from_message(message)
+        command = (message.text or "").split(maxsplit=1)[0].lower()
+        title = "FLEX" if command.startswith("/flex") else "PNL"
         if not query:
-            await message.reply("Send /pnl followed by a Solana contract address or $ticker.")
+            await message.reply(f"Send /{title.lower()} followed by a Solana contract address or $ticker.")
             return
 
         token = await self.resolve_token(query)
@@ -166,11 +174,20 @@ class OgreScanApp:
 
         call, _ = await self.db.upsert_call(message.chat.id, token, user.id, user_display_name(user))
         await self.maybe_backup_database()
-        card = build_pnl_card(token, call)
+        current_x = call.last_cap / call.initial_cap if call.initial_cap else call.peak_multiple
+        result_line = pnl_result_line(call, current_x)
+        card = build_pnl_card(token, call, title=title)
         photo = BufferedInputFile(card.getvalue(), filename=card.name)
         await message.reply_photo(
             photo,
-            caption=f"{token.symbol} call card | {call.peak_multiple:.2f}x best{powered_by_footer()}",
+            caption=(
+                f"🧌 <b>{title} CARD</b>\n"
+                f"<b>{token.name} (${token.symbol})</b>\n"
+                f"Player <b>{user_display_name(user)}</b>\n"
+                f"Called <b>{plain_money(call.initial_cap)}</b> | ATH <b>{plain_money(call.peak_cap)}</b>\n"
+                f"{result_line}"
+                f"{powered_by_footer()}"
+            ),
         )
 
     async def leaderboard_command(self, message: Message) -> None:
@@ -248,7 +265,7 @@ class OgreScanApp:
             call, is_new_call = None, False
 
         rug = await self.rug.summary(token.address) if self.rug else None
-        scan_text = format_scan_caption(token, call, is_new_call)
+        scan_text = format_scan_caption(token, call, is_new_call, rug)
         banner = await self.build_scan_photo(token)
         try:
             await message.reply_photo(banner, caption=scan_text)
@@ -282,15 +299,24 @@ class OgreScanApp:
             return None
         return normalize_image_bytes(data)
 
-    async def resolve_token(self, query: str):
+    async def resolve_token(self, query: str, include_paid: bool = True):
         token = await self.dex.scan_solana_token(query)
         if token and self.pump:
-            return token.with_pump_metadata(await self.pump.metadata(token.address))
+            token = token.with_pump_metadata(await self.pump.metadata(token.address))
         if token:
-            return token
+            return await self.enrich_dex_paid(token) if include_paid else token
         if self.pump and is_solana_address(query):
-            return await self.pump.scan_token(query)
+            pump_token = await self.pump.scan_token(query)
+            if not pump_token:
+                return None
+            return await self.enrich_dex_paid(pump_token) if include_paid else pump_token
         return None
+
+    async def enrich_dex_paid(self, token):
+        paid = await self.dex.token_orders_paid(token.chain_id or "solana", token.address)
+        if paid is None:
+            return token
+        return replace(token, dex_paid=bool(token.dex_paid or paid))
 
     def start_auto_backup_loop(self) -> None:
         if not self.sqlite_backup_enabled() or self.backup_task:
@@ -311,6 +337,55 @@ class OgreScanApp:
         while True:
             await asyncio.sleep(max(60, self.settings.backup_interval_seconds))
             await self.backup_database()
+
+    def start_call_tracker_loop(self) -> None:
+        if self.call_tracker_task or self.settings.call_update_interval_seconds <= 0:
+            return
+        self.call_tracker_task = asyncio.create_task(self.call_tracker_loop())
+
+    async def stop_call_tracker_loop(self) -> None:
+        if not self.call_tracker_task:
+            return
+        self.call_tracker_task.cancel()
+        try:
+            await self.call_tracker_task
+        except asyncio.CancelledError:
+            pass
+        self.call_tracker_task = None
+
+    async def call_tracker_loop(self) -> None:
+        while True:
+            await asyncio.sleep(max(30, self.settings.call_update_interval_seconds))
+            await self.refresh_tracked_calls()
+
+    async def refresh_tracked_calls(self) -> None:
+        try:
+            calls = await self.db.tracked_calls(limit=max(1, self.settings.call_update_limit))
+        except Exception:
+            logging.exception("Could not load tracked calls for live API refresh.")
+            return
+
+        changed = 0
+        for record in calls:
+            try:
+                token = await self.resolve_token(record.token_address, include_paid=False)
+                if not token or not token.cap_for_tracking:
+                    continue
+                updated, _ = await self.db.upsert_call(
+                    record.chat_id,
+                    token,
+                    record.caller_user_id,
+                    record.caller_name,
+                )
+                if updated.last_cap != record.last_cap or updated.peak_multiple != record.peak_multiple:
+                    changed += 1
+            except Exception:
+                logging.exception("Live call refresh failed for %s", record.token_address)
+            await asyncio.sleep(0.25)
+
+        if changed:
+            logging.info("Live call tracker refreshed %s calls.", changed)
+            await self.maybe_backup_database()
 
     def sqlite_backup_enabled(self) -> bool:
         return bool(
@@ -542,6 +617,7 @@ def safe_scan_caption(token, call) -> str:
     cap = call.initial_cap if call else None
     peak = call.peak_cap if call else None
     best = call.peak_multiple if call else None
+    current = (call.last_cap / call.initial_cap) if call and call.initial_cap else None
     caller = call.caller_name if call else "unknown"
     lines = [
         "OgreScanBot",
@@ -559,6 +635,8 @@ def safe_scan_caption(token, call) -> str:
         "",
         f"Caller: {caller}",
         f"Called at: {plain_money(cap)}",
+        f"Call to ATH: {best:.2f}x" if best is not None else "Call to ATH: n/a",
+        f"Current: {current:.2f}x" if current is not None else "Current: n/a",
         "",
         "Powered by Ogres",
         "Telegram: https://t.me/ogrecoinonsol",
@@ -566,6 +644,18 @@ def safe_scan_caption(token, call) -> str:
         "Twitter: https://twitter.com/i/communities/1930265213917425858",
     ]
     return "\n".join(lines)[:850]
+
+
+def pnl_result_line(call, current_x: float) -> str:
+    if call.peak_multiple > 1.0001:
+        peak_pct = (call.peak_multiple - 1.0) * 100
+        current_pct = (current_x - 1.0) * 100
+        return (
+            f"Call to ATH <b>{call.peak_multiple:.2f}x</b> "
+            f"(<b>+{peak_pct:.0f}%</b>) | Current <b>{current_x:.2f}x</b> ({current_pct:+.0f}%)"
+        )
+    current_pct = (current_x - 1.0) * 100
+    return f"Current <b>{current_x:.2f}x</b> (<b>{current_pct:+.0f}%</b>) | ATH <b>{call.peak_multiple:.2f}x</b>"
 
 
 def plain_money(value: float | None) -> str:

@@ -21,6 +21,8 @@ class Settings:
     backup_chat_id_file: str
     backup_interval_seconds: int
     restore_backup_on_start: bool
+    call_update_interval_seconds: int
+    call_update_limit: int
 
 
 def load_settings() -> Settings:
@@ -49,4 +51,6 @@ def load_settings() -> Settings:
         backup_chat_id_file=os.getenv("BACKUP_CHAT_ID_FILE", "backup_chat_id.txt").strip() or "backup_chat_id.txt",
         backup_interval_seconds=int(os.getenv("BACKUP_INTERVAL_SECONDS", "60")),
         restore_backup_on_start=os.getenv("RESTORE_BACKUP_ON_START", "true").lower() in {"1", "true", "yes", "on"},
+        call_update_interval_seconds=int(os.getenv("CALL_UPDATE_INTERVAL_SECONDS", "180")),
+        call_update_limit=int(os.getenv("CALL_UPDATE_LIMIT", "150")),
     )

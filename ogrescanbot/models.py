@@ -31,6 +31,9 @@ class TokenScan:
     socials: list[dict[str, Any]]
     websites: list[dict[str, Any]]
     raw_pair: dict[str, Any]
+    bonding_progress_pct: float | None = None
+    is_pump_complete: bool | None = None
+    dex_paid: bool | None = None
 
     @property
     def cap_for_tracking(self) -> float | None:
@@ -61,6 +64,12 @@ class TokenScan:
             description=self.description or _clean_string(pump.get("description")),
             socials=socials,
             websites=websites,
+            bonding_progress_pct=self.bonding_progress_pct
+            if self.bonding_progress_pct is not None
+            else pump_bonding_progress_pct(pump, self.cap_for_tracking),
+            is_pump_complete=self.is_pump_complete
+            if self.is_pump_complete is not None
+            else pump_is_complete(pump),
         )
 
 
@@ -71,7 +80,11 @@ class RugSummary:
     top_holder_pct: float | None
     mint_authority: str | None
     freeze_authority: str | None
+    dev_sold: bool | None
     raw: dict[str, Any]
+
+
+PUMP_BONDING_COMPLETE_USD = 69_000.0
 
 
 def _clean_string(value: object) -> str | None:
@@ -83,6 +96,37 @@ def _clean_string(value: object) -> str | None:
 
 def _has_url(items: list[dict[str, Any]], url: str) -> bool:
     return any(str(item.get("url", "")).strip().lower() == url.lower() for item in items)
+
+
+def pump_is_complete(pump: dict[str, Any]) -> bool | None:
+    for key in ("complete", "graduated", "migrated"):
+        value = pump.get(key)
+        if isinstance(value, bool):
+            return value
+    if pump.get("raydium_pool") or pump.get("raydiumPool") or pump.get("pool"):
+        return True
+    return False if pump else None
+
+
+def pump_bonding_progress_pct(pump: dict[str, Any], fallback_cap: float | None = None) -> float | None:
+    if not pump:
+        return None
+    if pump_is_complete(pump):
+        return 100.0
+
+    for key in ("bonding_curve_progress", "bondingCurveProgress", "progress"):
+        value = _float_or_none(pump.get(key))
+        if value is not None:
+            return _clamp_pct(value * 100 if value <= 1 else value)
+
+    cap = (
+        _float_or_none(pump.get("usd_market_cap"))
+        or _float_or_none(pump.get("market_cap"))
+        or fallback_cap
+    )
+    if cap is None or cap <= 0:
+        return None
+    return _clamp_pct((cap / PUMP_BONDING_COMPLETE_USD) * 100, max_value=99.9)
 
 
 def normalize_media_url(url: str | None) -> str | None:
@@ -99,3 +143,16 @@ def normalize_media_url(url: str | None) -> str | None:
     if text.startswith("Qm") or text.startswith("bafy"):
         return f"https://ipfs.io/ipfs/{text}"
     return text
+
+
+def _float_or_none(value: object) -> float | None:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _clamp_pct(value: float, max_value: float = 100.0) -> float:
+    return max(0.0, min(max_value, value))

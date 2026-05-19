@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import aiohttp
 
 from .models import RugSummary
@@ -35,6 +37,7 @@ class RugCheckClient:
             top_holder_pct=top_pct,
             mint_authority=_string_or_none(data.get("mintAuthority")) if isinstance(data, dict) else None,
             freeze_authority=_string_or_none(data.get("freezeAuthority")) if isinstance(data, dict) else None,
+            dev_sold=_detect_dev_sold(data) if isinstance(data, dict) else None,
             raw=data if isinstance(data, dict) else {},
         )
 
@@ -53,3 +56,31 @@ def _string_or_none(value: object) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _detect_dev_sold(data: dict) -> bool | None:
+    risks = data.get("risks")
+    text = json.dumps(risks if isinstance(risks, list) else data, default=str).lower()
+    negative = (
+        "dev has not sold",
+        "developer has not sold",
+        "creator has not sold",
+        "dev not sold",
+        "creator not sold",
+    )
+    if any(phrase in text for phrase in negative):
+        return False
+
+    positive = (
+        "dev sold",
+        "developer sold",
+        "creator sold",
+        "deployer sold",
+        "creator has sold",
+    )
+    if any(phrase in text for phrase in positive):
+        return True
+
+    if isinstance(risks, list):
+        return False
+    return None

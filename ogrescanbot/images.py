@@ -16,37 +16,69 @@ PNL_BACKGROUND = ASSET_DIR / "pnl_background_ogre.jpg"
 SCAN_FALLBACK = ASSET_DIR / "scan_fallback_ogre.jpg"
 
 
-def build_pnl_card(token: TokenScan, call: CallRecord) -> BytesIO:
+def build_pnl_card(token: TokenScan, call: CallRecord, title: str = "PNL") -> BytesIO:
     width, height = 1280, 720
     image = _load_background(width, height)
     draw = ImageDraw.Draw(image, "RGBA")
 
-    font_huge = _font(148, bold=True)
-    font_brand = _font(74, bold=True)
-    font_mid = _font(44, bold=True)
-    font_small = _font(31, bold=True)
-    font_tiny = _font(24)
+    font_result = _font(158, bold=True)
+    font_percent = _font(58, bold=True)
+    font_brand = _font(76, bold=True)
+    font_label = _font(27, bold=True)
+    font_mid = _font(42, bold=True)
+    font_small = _font(30, bold=True)
+    font_tiny = _font(22)
 
-    multiple = max(1.0, call.last_cap / call.initial_cap) if call.initial_cap else call.peak_multiple
+    metrics = _pnl_metrics(call)
+    accent = "#18ff43" if metrics["positive"] else "#ff3333"
+    accent_soft = "#8dff9d" if metrics["positive"] else "#ff9a9a"
+    glow_dark = "#004b12" if metrics["positive"] else "#4b0000"
+    glow_mid = "#0b9f2d" if metrics["positive"] else "#b31818"
 
-    draw.rectangle((0, 0, width, height), outline="#06120d", width=10)
-    draw.rounded_rectangle((710, 54, 1228, 620), radius=22, fill=(0, 0, 0, 145), outline="#43ff62", width=3)
-    draw.rounded_rectangle((734, 76, 1204, 598), radius=18, outline="#0e5329", width=2)
-
-    draw.text((968, 126), "OGRE", fill="#ffffff", font=font_brand, anchor="mm")
-    draw.text((968, 190), f"called at {money(call.initial_cap)}", fill="#d8f5dd", font=font_small, anchor="mm")
-
-    _glow_text(image, (968, 330), f"{multiple:.2f}x", font_huge)
+    overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    overlay_draw = ImageDraw.Draw(overlay, "RGBA")
+    overlay_draw.rectangle((0, 0, width, height), fill=(0, 18, 6, 52))
+    overlay_draw.rectangle((0, 0, width, 130), fill=(0, 0, 0, 105))
+    overlay_draw.rectangle((0, 560, width, height), fill=(0, 0, 0, 135))
+    overlay_draw.polygon([(610, 0), (width, 0), (width, height), (720, height)], fill=(0, 0, 0, 122))
+    image = Image.alpha_composite(image, overlay)
     draw = ImageDraw.Draw(image, "RGBA")
-    draw.text((968, 422), "PLAYER", fill="#69ff83", font=font_tiny, anchor="mm")
-    draw.text((968, 462), _shorten(call.caller_name, 20), fill="#f4fff6", font=font_mid, anchor="mm")
-    draw.text((968, 502), "TOKEN", fill="#69ff83", font=font_tiny, anchor="mm")
-    draw.text((968, 536), _shorten(f"{token.name} (${token.symbol})", 24), fill="#c4e6ca", font=font_small, anchor="mm")
-    draw.text((968, 580), f"now {money(call.last_cap)} | best {call.peak_multiple:.2f}x", fill="#69ff83", font=font_small, anchor="mm")
+
+    draw.rectangle((0, 0, width, height), outline="#07110b", width=10)
+    draw.line((24, 142, width - 24, 142), fill=accent, width=3)
+
+    _shadow_text(draw, (42, 48), title.upper(), font=font_label, fill=accent)
+    _shadow_text(draw, (42, 92), _shorten(f"{token.name} (${token.symbol})", 34), font=font_mid, fill="#ffffff")
+
+    _shadow_text(draw, (width - 52, 48), "OGRE", font=font_brand, fill="#ffffff", anchor="ra")
+    _shadow_text(draw, (width - 54, 100), f"called at {money(call.initial_cap)}", font=font_small, fill="#d8f5dd", anchor="ra")
+
+    _glow_text(
+        image,
+        (940, 292),
+        metrics["headline"],
+        font_result,
+        fill=accent,
+        glow_dark=glow_dark,
+        glow_mid=glow_mid,
+    )
+    draw = ImageDraw.Draw(image, "RGBA")
+    _shadow_text(draw, (940, 404), metrics["percent"], font=font_percent, fill=accent_soft, anchor="mm")
+    _shadow_text(draw, (940, 458), metrics["caption"], font=font_small, fill="#f4fff6", anchor="mm")
+
+    draw.rounded_rectangle((48, 552, 470, 656), radius=18, fill=(0, 0, 0, 152), outline=accent, width=2)
+    draw.rounded_rectangle((498, 552, 846, 656), radius=18, fill=(0, 0, 0, 142), outline="#23482c", width=2)
+    draw.rounded_rectangle((874, 552, 1232, 656), radius=18, fill=(0, 0, 0, 142), outline="#23482c", width=2)
+
+    _shadow_text(draw, (74, 580), "PLAYER", font=font_tiny, fill=accent_soft)
+    _shadow_text(draw, (74, 620), _shorten(call.caller_name, 22), font=font_small, fill="#ffffff")
+    _shadow_text(draw, (524, 580), "ATH", font=font_tiny, fill=accent_soft)
+    _shadow_text(draw, (524, 620), money(call.peak_cap), font=font_small, fill="#ffffff")
+    _shadow_text(draw, (900, 580), "CURRENT", font=font_tiny, fill=accent_soft)
+    _shadow_text(draw, (900, 620), f"{money(call.last_cap)} | {metrics['current_x']}", font=font_small, fill="#ffffff")
 
     short_ca = f"{token.address[:6]}...{token.address[-6:]}"
-    draw.rounded_rectangle((370, 646, 910, 696), radius=12, fill=(0, 0, 0, 135))
-    draw.text((640, 672), f"@OgreScanBot  |  {short_ca}", fill="#c4d8c7", font=font_tiny, anchor="mm")
+    _shadow_text(draw, (640, 690), f"@OgreScanBot  |  {short_ca}", fill="#c4d8c7", font=font_tiny, anchor="mm")
 
     output = BytesIO()
     image.convert("RGB").save(output, format="PNG")
@@ -161,16 +193,62 @@ def _cover_resize(source: Image.Image, width: int, height: int) -> Image.Image:
     return source.resize((width, height), Image.Resampling.LANCZOS)
 
 
-def _glow_text(image: Image.Image, xy: tuple[int, int], text: str, font: ImageFont.ImageFont) -> None:
+def _pnl_metrics(call: CallRecord) -> dict[str, object]:
+    current_multiple = call.last_cap / call.initial_cap if call.initial_cap else call.peak_multiple
+    peak_multiple = call.peak_multiple if call.peak_multiple else current_multiple
+    positive = peak_multiple > 1.0001
+
+    if positive:
+        return_pct = (peak_multiple - 1.0) * 100
+        return {
+            "positive": True,
+            "headline": f"{peak_multiple:.2f}X",
+            "percent": f"+{return_pct:.0f}%",
+            "caption": "CALL TO ATH",
+            "current_x": f"{current_multiple:.2f}X",
+        }
+
+    return_pct = (current_multiple - 1.0) * 100
+    return {
+        "positive": False,
+        "headline": f"{return_pct:.0f}%",
+        "percent": f"{current_multiple:.2f}X",
+        "caption": "CURRENT FROM CALL",
+        "current_x": f"{current_multiple:.2f}X",
+    }
+
+
+def _shadow_text(
+    draw: ImageDraw.ImageDraw,
+    xy: tuple[int, int],
+    text: str,
+    font: ImageFont.ImageFont,
+    fill: str,
+    anchor: str = "la",
+) -> None:
     x, y = xy
-    for radius, fill in [(12, "#004b12"), (6, "#0b9f2d")]:
+    draw.text((x + 3, y + 3), text, fill=(0, 0, 0, 210), font=font, anchor=anchor)
+    draw.text((x, y), text, fill=fill, font=font, anchor=anchor)
+
+
+def _glow_text(
+    image: Image.Image,
+    xy: tuple[int, int],
+    text: str,
+    font: ImageFont.ImageFont,
+    fill: str = "#18ff43",
+    glow_dark: str = "#004b12",
+    glow_mid: str = "#0b9f2d",
+) -> None:
+    x, y = xy
+    for radius, glow_fill in [(12, glow_dark), (6, glow_mid)]:
         glow = Image.new("RGBA", image.size, (0, 0, 0, 0))
         glow_draw = ImageDraw.Draw(glow)
-        glow_draw.text((x, y), text, fill=fill, font=font, anchor="mm")
+        glow_draw.text((x, y), text, fill=glow_fill, font=font, anchor="mm")
         glow = glow.filter(ImageFilter.GaussianBlur(radius))
         image.alpha_composite(glow)
     draw = ImageDraw.Draw(image)
-    draw.text((x, y), text, fill="#18ff43", font=font, anchor="mm")
+    draw.text((x, y), text, fill=fill, font=font, anchor="mm")
 
 
 def money(value: float | None) -> str:

@@ -55,7 +55,27 @@ class DexscreenerClient:
             socials=info.get("socials") or [],
             websites=info.get("websites") or [],
             raw_pair=pair,
+            dex_paid=_boosts_paid(pair),
         )
+
+    async def token_orders_paid(self, chain_id: str, token_address: str) -> bool | None:
+        url = f"{DEX_API}/orders/v1/{chain_id}/{token_address}"
+        try:
+            async with self._session.get(url) as response:
+                if response.status >= 400:
+                    return None
+                data = await response.json(content_type=None)
+        except aiohttp.ClientError:
+            return None
+
+        orders = data
+        if isinstance(data, dict):
+            orders = data.get("orders") or data.get("data") or []
+        if not isinstance(orders, list):
+            return None
+        if not orders:
+            return False
+        return any(_paid_order(order) for order in orders if isinstance(order, dict))
 
     async def _token_pairs(self, token_address: str) -> list[dict]:
         url = f"{DEX_API}/token-pairs/v1/solana/{token_address}"
@@ -116,3 +136,21 @@ def _merged_info(selected_pair: dict, pairs: list[dict]) -> dict:
                     merged[key] = info.get(key)
                     break
     return merged
+
+
+def _boosts_paid(pair: dict) -> bool | None:
+    boosts = pair.get("boosts") or {}
+    if not isinstance(boosts, dict):
+        return None
+    active = _float_or_none(boosts.get("active"))
+    if active is None:
+        return None
+    return active > 0
+
+
+def _paid_order(order: dict) -> bool:
+    status = str(order.get("status") or "").lower()
+    payment_timestamp = order.get("paymentTimestamp")
+    if payment_timestamp:
+        return status not in {"cancelled", "rejected"}
+    return status in {"approved", "processing", "on-hold"}

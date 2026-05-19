@@ -46,7 +46,8 @@ def format_scan(token: TokenScan, call: CallRecord | None, is_new_call: bool, ru
             f"\n\n<b>Caller</b>\n"
             f"├ {html.escape(status)} by <b>{html.escape(call.caller_name)}</b>\n"
             f"├ Called at <b>{money(call.initial_cap)}</b>\n"
-            f"└ Best <b>{call.peak_multiple:.2f}x</b>"
+            f"└ ATH from call <b>{call.peak_multiple:.2f}x</b> ({multiple_pct(call.peak_multiple)}) | "
+            f"Current <b>{current_multiple(call):.2f}x</b> ({multiple_pct(current_multiple(call))})"
         )
 
     socials = social_links(token)
@@ -81,30 +82,53 @@ def format_scan(token: TokenScan, call: CallRecord | None, is_new_call: bool, ru
     )
 
 
-def format_scan_caption(token: TokenScan, call: CallRecord | None, is_new_call: bool) -> str:
+def format_scan_caption(
+    token: TokenScan,
+    call: CallRecord | None,
+    is_new_call: bool,
+    rug: RugSummary | None = None,
+) -> str:
     status = "New call" if is_new_call else "Already called"
     caller = html.escape(call.caller_name) if call else "unknown"
     called_at = money(call.initial_cap) if call else "n/a"
     now = money(call.last_cap) if call else money(token.cap_for_tracking)
     best = f"{call.peak_multiple:.2f}x" if call else "n/a"
+    current_value = current_multiple(call)
+    current = f"{current_value:.2f}x" if current_value is not None else "n/a"
     ath = ath_value(call)
+    stats = [
+        "📊 <b>Token Stats</b>",
+        f"├ MC:   <b>{money(token.market_cap)}</b>",
+        f"├ ATH:  <b>{ath}</b>",
+        f"├ USD:  <b>{price(token.price_usd)}</b> ({pct(token.price_change_h24)})",
+        f"├ LIQ:  <b>{money(token.liquidity_usd)}</b>",
+        f"├ VOL:  <b>{money(token.volume_h24)}</b> (24h)",
+        f"├ 1H:   <b>B {token.buys_h1 or 0} / S {token.sells_h1 or 0}</b> ({pct(token.price_change_h1)})",
+    ]
+    stats.extend(
+        [
+            f"├ P:    {pair_short_link(token)}",
+            f"└ CA:   <code>{short_address(token.address)}</code>",
+        ]
+    )
+
     return (
         f"<b>OgreScanBot</b>\n"
-        f"💊 <b>{html.escape(token.name)} (${html.escape(token.symbol)})</b>\n"
+        f"🧬 <b>{html.escape(token.name)} (${html.escape(token.symbol)})</b>\n"
         f"<code>{html.escape(token.address)}</code>\n"
-        f"└ #SOL | {html.escape(token.dex_id)} | {age_from_ms(token.created_at_ms)}\n\n"
-        f"📊 <b>Stats</b>\n"
-        f"├ USD <b>{price(token.price_usd)}</b> ({pct(token.price_change_h24)} 24h)\n"
-        f"├ MC <b>{money(token.market_cap)}</b> | LP <b>{money(token.liquidity_usd)}</b>\n"
-        f"├ Vol <b>{money(token.volume_h24)}</b> | 1H <b>{pct(token.price_change_h1)}</b>\n"
-        f"└ ATH <b>{ath}</b>\n\n"
+        f"└ 🌱 #SOL • {html.escape(token.dex_id)} • {age_from_ms(token.created_at_ms)}\n\n"
+        f"{chr(10).join(stats)}\n\n"
+        f"🔗 <b>Socials</b>\n"
+        f"└ {scan_social_links(token)}\n\n"
+        f"🛡 <b>Audit</b> <b>{audit_badge(rug)}</b>\n"
+        f"{audit_status(token, rug)}\n\n"
         f"🧌 <b>Call</b>\n"
         f"├ {html.escape(status)} by <b>{caller}</b>\n"
-        f"└ Called <b>{called_at}</b> | Now <b>{now}</b> | Best <b>{best}</b>\n\n"
-        f"🔗 <b>Links</b>\n"
-        f"{tool_links(token)}\n\n"
-        f"🔎 <b>X</b>\n"
-        f"{x_search_links(token)}"
+        f"├ Called <b>{called_at}</b> | Now <b>{now}</b>\n"
+        f"└ ATH from call <b>{best}</b> ({multiple_pct(call.peak_multiple if call else None)}) | "
+        f"Current <b>{current}</b> ({multiple_pct(current_value)})\n\n"
+        f"{scan_tool_links(token)}\n"
+        f"{scan_x_links(token)}"
         f"{powered_by_footer()}"
     )
 
@@ -241,6 +265,107 @@ def ath_value(call: CallRecord | None) -> str:
     return f"{money(call.peak_cap)} ({call.peak_multiple:.2f}x)"
 
 
+def current_multiple(call: CallRecord | None) -> float | None:
+    if not call or call.initial_cap <= 0:
+        return None
+    return max(0.0, call.last_cap / call.initial_cap)
+
+
+def multiple_pct(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    return f"{(value - 1.0) * 100:+.0f}%"
+
+
+def security_status(token: TokenScan, rug: RugSummary | None) -> str:
+    return (
+        f"├ Dev Sold <b>{dev_sold_light(rug.dev_sold if rug else None)}</b>\n"
+        f"├ DEX Paid <b>{dex_paid_light(token.dex_paid)}</b>\n"
+        f"├ Rug Score <b>{rug_score(rug)}</b> | Top <b>{rug_top_holder(rug)}</b>\n"
+        f"└ Mint <b>{authority_light(rug.mint_authority if rug else None, rug is not None)}</b> | "
+        f"Freeze <b>{authority_light(rug.freeze_authority if rug else None, rug is not None)}</b>"
+    )
+
+
+def audit_status(token: TokenScan, rug: RugSummary | None) -> str:
+    return (
+        f"├ 🧾 DEX <b>{dex_paid_bracket(token.dex_paid)}</b>\n"
+        f"├ 👥 Top Holders <b>[{rug_top_holder(rug)}]</b>\n"
+        f"├ 🧑‍💻 Dev Sold <b>{dev_sold_bracket(rug.dev_sold if rug else None)}</b>\n"
+        f"└ 🔐 Mint <b>{authority_bracket(rug.mint_authority if rug else None, rug is not None)}</b> • "
+        f"Freeze <b>{authority_bracket(rug.freeze_authority if rug else None, rug is not None)}</b>"
+    )
+
+
+def audit_badge(rug: RugSummary | None) -> str:
+    if not rug:
+        return "[n/a]"
+    risks = rug.risk_count if rug.risk_count is not None else 3
+    value = max(1, min(10, 10 - int(risks)))
+    return f"[{value}/10]"
+
+
+def dex_paid_bracket(value: bool | None) -> str:
+    if value is True:
+        return "[PAID]"
+    if value is False:
+        return "[UNPAID]"
+    return "[n/a]"
+
+
+def dev_sold_bracket(value: bool | None) -> str:
+    if value is True:
+        return "[YES]"
+    if value is False:
+        return "[NO]"
+    return "[n/a]"
+
+
+def authority_bracket(value: str | None, available: bool) -> str:
+    if not available:
+        return "[n/a]"
+    if value:
+        return "[ON]"
+    return "[OFF]"
+
+
+def dev_sold_light(value: bool | None) -> str:
+    if value is True:
+        return "🔴 Yes"
+    if value is False:
+        return "🟢 No"
+    return "⚪ n/a"
+
+
+def dex_paid_light(value: bool | None) -> str:
+    if value is True:
+        return "🟢 Paid"
+    if value is False:
+        return "🔴 Unpaid"
+    return "⚪ n/a"
+
+
+def authority_light(value: str | None, available: bool) -> str:
+    if not available:
+        return "⚪ n/a"
+    if value:
+        return "🔴 active"
+    return "🟢 none"
+
+
+def rug_score(rug: RugSummary | None) -> str:
+    if not rug or rug.score is None:
+        return "n/a"
+    risk_count = rug.risk_count if rug.risk_count is not None else "?"
+    return f"{rug.score:.0f} ({risk_count} risks)"
+
+
+def rug_top_holder(rug: RugSummary | None) -> str:
+    if not rug or rug.top_holder_pct is None:
+        return "n/a"
+    return f"{rug.top_holder_pct:.1f}%"
+
+
 def age_from_ms(created_at_ms: int | None) -> str:
     if not created_at_ms:
         return "age n/a"
@@ -250,6 +375,19 @@ def age_from_ms(created_at_ms: int | None) -> str:
     if seconds < 86400:
         return f"{seconds // 3600}h"
     return f"{seconds // 86400}d"
+
+
+def short_address(address: str, left: int = 4, right: int = 4) -> str:
+    clean = str(address or "").strip()
+    if len(clean) <= left + right + 3:
+        return html.escape(clean)
+    return html.escape(f"{clean[:left]}...{clean[-right:]}")
+
+
+def pair_short_link(token: TokenScan) -> str:
+    label = short_address(token.pair_address or token.address)
+    url = html.escape(token.pair_url or f"https://dexscreener.com/solana/{token.address}")
+    return f"<a href=\"{url}\">{label}</a>"
 
 
 def social_links(token: TokenScan) -> str:
@@ -265,6 +403,45 @@ def social_links(token: TokenScan) -> str:
         if url:
             links.append(f"<a href=\"{html.escape(str(url))}\">{html.escape(str(label))}</a>")
     return " | ".join(links) if links else "none found"
+
+
+def scan_social_links(token: TokenScan) -> str:
+    links: list[str] = []
+    telegram = social_url(token, {"telegram", "tg"})
+    website = first_website_url(token)
+    x_url = social_url(token, {"twitter", "x"})
+    if telegram:
+        links.append(f"<a href=\"{html.escape(telegram)}\">TG</a>")
+    if website:
+        links.append(f"<a href=\"{html.escape(website)}\">Web</a>")
+    if x_url:
+        links.append(f"<a href=\"{html.escape(x_url)}\">X</a>")
+    if token.description:
+        links.append("About")
+    return " • ".join(links) if links else "none found"
+
+
+def social_url(token: TokenScan, labels: set[str]) -> str | None:
+    for social in token.socials:
+        url = str(social.get("url") or "").strip()
+        label = str(social.get("type") or "").strip().lower()
+        if not url:
+            continue
+        if label in labels:
+            return url
+        if "telegram" in labels and ("t.me/" in url or "telegram." in url):
+            return url
+        if labels & {"twitter", "x"} and ("twitter.com" in url or "x.com" in url):
+            return url
+    return None
+
+
+def first_website_url(token: TokenScan) -> str | None:
+    for site in token.websites:
+        url = str(site.get("url") or "").strip()
+        if url:
+            return url
+    return None
 
 
 def format_metadata(token: TokenScan) -> str:
@@ -321,6 +498,49 @@ def tool_links(token: TokenScan) -> str:
     return " • ".join(links)
 
 
+def scan_tool_links(token: TokenScan) -> str:
+    address = html.escape(token.address)
+    pair = html.escape(token.pair_address or token.address)
+    dex_url = html.escape(token.pair_url)
+    dextools = f"https://www.dextools.io/app/en/solana/pair-explorer/{pair}"
+    gecko = f"https://www.geckoterminal.com/solana/pools/{pair}"
+    mobula = f"https://mobula.io/asset/{address}"
+    birdeye = f"https://birdeye.so/token/{address}?chain=solana"
+    rug = f"https://rugcheck.xyz/tokens/{address}"
+    solscan = f"https://solscan.io/token/{address}"
+    pump = f"https://pump.fun/{address}"
+    gmgn = f"https://gmgn.ai/sol/token/{address}"
+    bub = f"https://app.bubblemaps.io/sol/token/{address}"
+    return (
+        f"<a href=\"{dex_url}\">DEX</a>·"
+        f"<a href=\"{html.escape(dextools)}\">DEF</a>·"
+        f"<a href=\"{html.escape(gecko)}\">GT</a>·"
+        f"<a href=\"{html.escape(mobula)}\">MOB</a>·"
+        f"<a href=\"{html.escape(birdeye)}\">EXP</a>·"
+        f"<a href=\"{html.escape(rug)}\">RUG</a>\n"
+        f"<a href=\"{html.escape(bub)}\">BUB</a>·"
+        f"<a href=\"{html.escape(solscan)}\">SOL</a>·"
+        f"<a href=\"{html.escape(pump)}\">PUMP</a>·"
+        f"<a href=\"{html.escape(gmgn)}\">GMGN</a>"
+    )
+
+
+def scan_x_links(token: TokenScan) -> str:
+    official = official_x_link(token)
+    terms = [token.address]
+    if token.symbol and token.symbol != "?":
+        terms.append(f"${token.symbol}")
+    base_query = " OR ".join(terms)
+    recent = f"https://x.com/search?q={quote_plus(base_query)}&src=typed_query&f=live"
+    top = f"https://x.com/search?q={quote_plus(base_query + ' min_faves:25')}&src=typed_query&f=top"
+    links = []
+    if official:
+        links.append(f"<a href=\"{html.escape(official)}\">X</a>")
+    links.append(f"<a href=\"{html.escape(recent)}\">Xs</a>")
+    links.append(f"<a href=\"{html.escape(top)}\">Big Xs</a>")
+    return " · ".join(links)
+
+
 def format_rug(rug: RugSummary | None) -> str:
     if not rug:
         return "└ RugCheck unavailable/free endpoint did not return data"
@@ -333,6 +553,7 @@ def format_rug(rug: RugSummary | None) -> str:
         f"├ Score   <b>{score}</b>\n"
         f"├ Risks   <b>{risk_count}</b>\n"
         f"├ Top     <b>{top}</b>\n"
+        f"├ Dev Sold <b>{dev_sold_light(rug.dev_sold)}</b>\n"
         f"├ Mint    <b>{mint}</b>\n"
         f"└ Freeze  <b>{freeze}</b>"
     )
