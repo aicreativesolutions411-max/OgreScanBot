@@ -18,7 +18,7 @@ from .db import Database, period_to_since
 from .dexscreener import DexscreenerClient
 from .extract import extract_token_queries, is_solana_address
 from .formatting import format_help, format_leaderboard, format_scan, powered_by_footer, user_display_name
-from .images import build_pnl_card
+from .images import build_pnl_card, build_scan_banner
 from .pumpfun import PumpFunClient
 from .rugcheck import RugCheckClient
 
@@ -160,20 +160,21 @@ class OgreScanApp:
 
         rug = await self.rug.summary(token.address) if self.rug else None
         scan_text = format_scan(token, call, is_new_call, rug)
-        image_url = token.image_url or token.header_url
-        if image_url:
-            try:
-                image = await self.download_image(image_url)
-                photo = BufferedInputFile(image, filename="token-image.jpg") if image else image_url
-                await message.reply_photo(
-                    photo,
-                    caption=photo_caption(scan_text),
-                    show_caption_above_media=False,
-                )
-                return
-            except Exception:
-                logging.exception("Telegram rejected token image: %s", image_url)
-        await message.reply(scan_text, disable_web_page_preview=True)
+        banner = await self.build_scan_photo(token)
+        await message.reply_photo(
+            banner,
+            caption=photo_caption(scan_text),
+            show_caption_above_media=False,
+        )
+
+    async def build_scan_photo(self, token) -> BufferedInputFile:
+        source = None
+        for image_url in unique_urls([token.image_url, token.header_url]):
+            source = await self.download_image(image_url)
+            if source:
+                break
+        banner = build_scan_banner(token, source)
+        return BufferedInputFile(banner.getvalue(), filename=banner.name)
 
     async def download_image(self, url: str) -> bytes | None:
         try:
@@ -240,6 +241,19 @@ def remove_section(text: str, heading: str) -> str:
     if end < 0:
         return text[:start].rstrip()
     return (text[:start] + text[end + 2 :]).strip()
+
+
+def unique_urls(urls: list[str | None]) -> list[str]:
+    seen: set[str] = set()
+    clean: list[str] = []
+    for url in urls:
+        if not url:
+            continue
+        value = str(url).strip()
+        if value and value not in seen:
+            clean.append(value)
+            seen.add(value)
+    return clean
 
 
 def normalize_image_bytes(data: bytes) -> bytes | None:

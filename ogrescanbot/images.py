@@ -4,7 +4,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, UnidentifiedImageError
 
 if TYPE_CHECKING:
     from .db import CallRecord
@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 ASSET_DIR = Path(__file__).resolve().parent.parent / "assets"
 PNL_BACKGROUND = ASSET_DIR / "pnl_background_ogre.jpg"
+SCAN_FALLBACK = ASSET_DIR / "scan_fallback_ogre.jpg"
 
 
 def build_pnl_card(token: TokenScan, call: CallRecord) -> BytesIO:
@@ -54,11 +55,99 @@ def build_pnl_card(token: TokenScan, call: CallRecord) -> BytesIO:
     return output
 
 
+def build_scan_banner(token: TokenScan, source_image: bytes | None = None) -> BytesIO:
+    width, height = 1280, 360
+    use_fallback_branding = False
+    if source_image:
+        image = _banner_from_bytes(source_image, width, height)
+    elif SCAN_FALLBACK.exists():
+        image = _banner_from_file(SCAN_FALLBACK, width, height)
+        use_fallback_branding = True
+    else:
+        image = _load_background(width, height)
+        use_fallback_branding = True
+
+    draw = ImageDraw.Draw(image, "RGBA")
+    draw.rectangle((0, 0, width, height), outline="#1eff4d", width=6)
+    if use_fallback_branding:
+        _draw_scan_fallback_branding(draw, width)
+
+    output = BytesIO()
+    image.convert("RGB").save(output, format="JPEG", quality=90, optimize=True)
+    output.seek(0)
+    output.name = "ogrescan-banner.jpg"
+    return output
+
+
+def _banner_from_bytes(data: bytes, width: int, height: int) -> Image.Image:
+    try:
+        source = Image.open(BytesIO(data)).convert("RGB")
+    except (OSError, UnidentifiedImageError):
+        return _fallback_banner(width, height)
+    return _smart_banner(source, width, height)
+
+
+def _banner_from_file(path: Path, width: int, height: int) -> Image.Image:
+    try:
+        source = Image.open(path).convert("RGB")
+    except OSError:
+        return _load_background(width, height)
+    return _smart_banner(source, width, height)
+
+
+def _smart_banner(source: Image.Image, width: int, height: int) -> Image.Image:
+    dst_ratio = width / height
+    src_ratio = source.width / source.height
+    if abs(src_ratio - dst_ratio) < 0.7:
+        return _cover_resize(source, width, height).convert("RGBA")
+
+    background = _cover_resize(source, width, height).convert("RGBA")
+    background = background.filter(ImageFilter.GaussianBlur(18))
+    background = ImageEnhance.Brightness(background).enhance(0.58)
+
+    foreground = source.copy()
+    foreground.thumbnail((width, height), Image.Resampling.LANCZOS)
+    canvas = background
+    x = (width - foreground.width) // 2
+    y = (height - foreground.height) // 2
+    canvas.alpha_composite(foreground.convert("RGBA"), (x, y))
+    return canvas
+
+
+def _fallback_banner(width: int, height: int) -> Image.Image:
+    if SCAN_FALLBACK.exists():
+        return _banner_from_file(SCAN_FALLBACK, width, height)
+    return _load_background(width, height)
+
+
+def _draw_scan_fallback_branding(draw: ImageDraw.ImageDraw, width: int) -> None:
+    label_font = _font(28, bold=True)
+    ticker_font = _font(42, bold=True)
+
+    draw.rounded_rectangle((28, 24, 330, 76), radius=14, fill=(0, 0, 0, 150), outline="#39ff57", width=2)
+    draw.text((48, 50), "Powered by Ogres", fill="#f4fff6", font=label_font, anchor="lm")
+
+    draw.rounded_rectangle((width - 190, 24, width - 28, 82), radius=16, fill=(0, 0, 0, 150), outline="#39ff57", width=2)
+    draw.text((width - 109, 52), "$OGRE", fill="#43ff62", font=ticker_font, anchor="mm")
+
+
 def _load_background(width: int, height: int) -> Image.Image:
     if not PNL_BACKGROUND.exists():
         return Image.new("RGBA", (width, height), "#06120d")
 
     source = Image.open(PNL_BACKGROUND).convert("RGB")
+    image = _cover_resize(source, width, height)
+    image = ImageEnhance.Brightness(image).enhance(0.78)
+    image = ImageEnhance.Contrast(image).enhance(1.15)
+
+    overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    overlay_draw = ImageDraw.Draw(overlay)
+    overlay_draw.rectangle((0, 0, width, height), fill=(0, 20, 8, 58))
+    overlay_draw.rectangle((690, 0, width, height), fill=(0, 0, 0, 105))
+    return Image.alpha_composite(image.convert("RGBA"), overlay)
+
+
+def _cover_resize(source: Image.Image, width: int, height: int) -> Image.Image:
     src_ratio = source.width / source.height
     dst_ratio = width / height
     if src_ratio > dst_ratio:
@@ -69,16 +158,7 @@ def _load_background(width: int, height: int) -> Image.Image:
         new_height = int(source.width / dst_ratio)
         top = (source.height - new_height) // 2
         source = source.crop((0, top, source.width, top + new_height))
-
-    image = source.resize((width, height), Image.Resampling.LANCZOS)
-    image = ImageEnhance.Brightness(image).enhance(0.78)
-    image = ImageEnhance.Contrast(image).enhance(1.15)
-
-    overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    overlay_draw = ImageDraw.Draw(overlay)
-    overlay_draw.rectangle((0, 0, width, height), fill=(0, 20, 8, 58))
-    overlay_draw.rectangle((690, 0, width, height), fill=(0, 0, 0, 105))
-    return Image.alpha_composite(image.convert("RGBA"), overlay)
+    return source.resize((width, height), Image.Resampling.LANCZOS)
 
 
 def _glow_text(image: Image.Image, xy: tuple[int, int], text: str, font: ImageFont.ImageFont) -> None:
