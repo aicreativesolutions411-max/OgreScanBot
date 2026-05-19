@@ -164,15 +164,11 @@ class OgreScanApp:
         scan_text = format_scan(token, call, is_new_call, rug)
         if token.image_url:
             try:
-                if len(scan_text) <= 1000:
-                    await message.reply_photo(token.image_url, caption=scan_text, show_caption_above_media=True)
-                else:
-                    await message.reply_photo(
-                        token.image_url,
-                        caption=f"{token.name} (${token.symbol})",
-                        show_caption_above_media=True,
-                    )
-                    await message.reply(scan_text, disable_web_page_preview=True)
+                await message.reply_photo(
+                    token.image_url,
+                    caption=photo_caption(scan_text),
+                    show_caption_above_media=False,
+                )
                 return
             except Exception:
                 logging.exception("Telegram rejected token image URL: %s", token.image_url)
@@ -190,6 +186,37 @@ def command_args(message: Message) -> list[str]:
 def first_token_query_from_message(message: Message) -> str | None:
     queries = extract_token_queries(message.text or message.caption or "")
     return queries[0] if queries else None
+
+
+def photo_caption(text: str, limit: int = 1000) -> str:
+    if len(text) <= limit:
+        return text
+
+    footer_start = text.find("<b>Powered by Ogres</b>")
+    footer = text[footer_start - 2 :] if footer_start > 0 else ""
+    body = text[: footer_start - 2] if footer_start > 0 else text
+
+    removable_sections = ["🔎 <b>X Posts</b>", "🧾 <b>Info</b>"]
+    for section in removable_sections:
+        body = remove_section(body, section)
+        candidate = f"{body.rstrip()}{footer}"
+        if len(candidate) <= limit:
+            return candidate
+
+    remaining = limit - len(footer) - len("\n\n...")
+    if remaining < 100:
+        return text[:limit]
+    return f"{body[:remaining].rstrip()}\n\n...{footer}"
+
+
+def remove_section(text: str, heading: str) -> str:
+    start = text.find(heading)
+    if start < 0:
+        return text
+    end = text.find("\n\n", start)
+    if end < 0:
+        return text[:start].rstrip()
+    return (text[:start] + text[end + 2 :]).strip()
 
 
 async def run_polling(settings: Settings) -> None:
