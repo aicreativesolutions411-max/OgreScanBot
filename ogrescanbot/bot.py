@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from io import BytesIO
+from pathlib import Path
+import time
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.enums import ParseMode
@@ -16,8 +18,17 @@ from PIL import Image, UnidentifiedImageError
 from .config import Settings, load_settings
 from .db import Database, period_to_since
 from .dexscreener import DexscreenerClient
-from .extract import extract_token_queries, is_solana_address
-from .formatting import format_help, format_leaderboard, format_scan, powered_by_footer, user_display_name
+from .extract import extract_token_queries, extract_x_post_links, is_solana_address
+from .formatting import (
+    format_help,
+    format_leaderboard,
+    format_leaderboard_backup_snapshot,
+    format_scan,
+    format_scan_caption,
+    format_x_post_embed,
+    powered_by_footer,
+    user_display_name,
+)
 from .images import build_pnl_card, build_scan_banner
 from .pumpfun import PumpFunClient
 from .rugcheck import RugCheckClient
@@ -35,13 +46,20 @@ class OgreScanApp:
         self.dex = DexscreenerClient()
         self.rug = RugCheckClient() if settings.enable_rugcheck else None
         self.pump = PumpFunClient() if settings.enable_pump_metadata else None
+        self.last_backup_at = 0.0
+        self.backup_task: asyncio.Task | None = None
+        self.learned_backup_chat_id = ""
         self._register_handlers()
 
     async def start(self) -> None:
+        await self.restore_database_backup()
         await self.db.open()
+        await self.load_backup_chat_id_from_db()
+        self.start_auto_backup_loop()
         try:
             await self.dp.start_polling(self.bot)
         finally:
+            await self.stop_auto_backup_loop()
             await self.dex.close()
             if self.rug:
                 await self.rug.close()
@@ -67,12 +85,16 @@ class OgreScanApp:
         return web.json_response({"ok": True, "bot": self.settings.bot_name})
 
     async def _on_webhook_startup(self, app: web.Application) -> None:
+        await self.restore_database_backup()
         await self.db.open()
+        await self.load_backup_chat_id_from_db()
+        self.start_auto_backup_loop()
         webhook_endpoint = f"{self.settings.webhook_url}{self.settings.webhook_path}"
         await self.bot.set_webhook(webhook_endpoint, drop_pending_updates=True)
         logging.info("Webhook set to %s", webhook_endpoint)
 
     async def _on_webhook_cleanup(self, app: web.Application) -> None:
+        await self.stop_auto_backup_loop()
         await self.dex.close()
         if self.rug:
             await self.rug.close()
@@ -86,7 +108,9 @@ class OgreScanApp:
         self.dp.message.register(self.scan_command, Command("scan"))
         self.dp.message.register(self.pnl_command, Command("pnl", "flex"))
         self.dp.message.register(self.leaderboard_command, Command("lb", "leaderboard"))
+        self.dp.message.register(self.backup_command, Command("backup"))
         self.dp.message.register(self.auto_scan_message, F.text)
+        self.dp.channel_post.register(self.set_backup_channel_command, Command("setbackup", "backuphere"))
 
     async def help_handler(self, message: Message) -> None:
         await message.reply(format_help(self.settings.bot_name), disable_web_page_preview=True)
@@ -102,9 +126,21 @@ class OgreScanApp:
         text = message.text or ""
         if text.startswith("/"):
             return
+        await self.maybe_embed_x_posts(message)
         query = first_token_query_from_message(message)
         if query:
             await self.scan_and_reply(message, query)
+
+    async def maybe_embed_x_posts(self, message: Message) -> None:
+        links = extract_x_post_links(message.text or message.caption or "")
+        for username, _status_id, embed_url in links[:2]:
+            try:
+                await message.reply(
+                    format_x_post_embed(username, embed_url, message.from_user),
+                    disable_web_page_preview=False,
+                )
+            except Exception:
+                logging.exception("Failed to embed X post: %s", embed_url)
 
     async def pnl_command(self, message: Message) -> None:
         query = first_token_query_from_message(message)
@@ -123,6 +159,7 @@ class OgreScanApp:
             return
 
         call, _ = await self.db.upsert_call(message.chat.id, token, user.id, user_display_name(user))
+        await self.maybe_backup_database()
         card = build_pnl_card(token, call)
         photo = BufferedInputFile(card.getvalue(), filename=card.name)
         await message.reply_photo(
@@ -143,6 +180,25 @@ class OgreScanApp:
         stats = await self.db.stats(message.chat.id, since_ts, self.settings.min_multiple_for_hit)
         await message.reply(format_leaderboard(period, traders, calls, stats), disable_web_page_preview=True)
 
+    async def backup_command(self, message: Message) -> None:
+        if not self.sqlite_backup_enabled():
+            await message.reply("Backup channel is not configured. Post /setbackup inside the private backup channel first.")
+            return
+        await self.backup_database()
+        await message.reply("Backup sent to the configured Telegram backup channel.")
+
+    async def set_backup_channel_command(self, message: Message) -> None:
+        await self.save_backup_chat_id(str(message.chat.id))
+        await message.answer("OgreScanBot backup channel set. I will auto-backup here.")
+        self.start_auto_backup_loop()
+        restored = False
+        if self.db.conn and not await self.db.chat_ids(limit=1):
+            restored = await self.restore_database_backup(force=True)
+        if restored:
+            await message.answer("Restored calls and leaderboards from the pinned backup.")
+        if self.db.conn:
+            await self.backup_database()
+
     async def scan_and_reply(self, message: Message, query: str) -> None:
         await message.bot.send_chat_action(message.chat.id, "typing")
         token = await self.resolve_token(query)
@@ -155,14 +211,15 @@ class OgreScanApp:
         caller_name = user_display_name(user) if user else "unknown"
         try:
             call, is_new_call = await self.db.upsert_call(message.chat.id, token, caller_id, caller_name)
+            await self.maybe_backup_database()
         except ValueError:
             call, is_new_call = None, False
 
         rug = await self.rug.summary(token.address) if self.rug else None
-        scan_text = format_scan(token, call, is_new_call, rug)
+        scan_text = format_scan_caption(token, call, is_new_call)
         banner = await self.build_scan_photo(token)
         try:
-            await message.reply_photo(banner, caption=photo_caption(scan_text))
+            await message.reply_photo(banner, caption=scan_text)
         except Exception:
             logging.exception("Full scan photo send failed; retrying with safe caption.")
             safe_caption = safe_scan_caption(token, call)
@@ -202,6 +259,181 @@ class OgreScanApp:
         if self.pump and is_solana_address(query):
             return await self.pump.scan_token(query)
         return None
+
+    def start_auto_backup_loop(self) -> None:
+        if not self.sqlite_backup_enabled() or self.backup_task:
+            return
+        self.backup_task = asyncio.create_task(self.auto_backup_loop())
+
+    async def stop_auto_backup_loop(self) -> None:
+        if not self.backup_task:
+            return
+        self.backup_task.cancel()
+        try:
+            await self.backup_task
+        except asyncio.CancelledError:
+            pass
+        self.backup_task = None
+
+    async def auto_backup_loop(self) -> None:
+        while True:
+            await asyncio.sleep(max(60, self.settings.backup_interval_seconds))
+            await self.backup_database()
+
+    def sqlite_backup_enabled(self) -> bool:
+        return bool(
+            self.backup_chat_id()
+            and not self.settings.database_path.startswith(("postgres://", "postgresql://"))
+        )
+
+    def backup_chat_id(self) -> str:
+        if self.settings.backup_chat_id:
+            return self.settings.backup_chat_id
+        if self.learned_backup_chat_id:
+            return self.learned_backup_chat_id
+        path = Path(self.settings.backup_chat_id_file)
+        if path.exists():
+            value = path.read_text(encoding="utf-8").strip()
+            if value:
+                self.learned_backup_chat_id = value
+                return value
+        return ""
+
+    async def save_backup_chat_id(self, chat_id: str) -> None:
+        self.learned_backup_chat_id = chat_id
+        Path(self.settings.backup_chat_id_file).write_text(chat_id, encoding="utf-8")
+        if self.db.conn or self.db.pool:
+            await self.db.set_setting("backup_chat_id", chat_id)
+
+    async def load_backup_chat_id_from_db(self) -> None:
+        if self.settings.backup_chat_id or self.learned_backup_chat_id:
+            return
+        if not (self.db.conn or self.db.pool):
+            return
+        value = await self.db.get_setting("backup_chat_id")
+        if value:
+            self.learned_backup_chat_id = value
+            Path(self.settings.backup_chat_id_file).write_text(value, encoding="utf-8")
+
+    async def restore_database_backup(self, force: bool = False) -> bool:
+        if not self.sqlite_backup_enabled() or not self.settings.restore_backup_on_start:
+            return False
+
+        db_path = Path(self.settings.database_path)
+        if db_path.exists() and db_path.stat().st_size > 0 and not force:
+            return False
+
+        try:
+            backup_chat_id = self.backup_chat_id()
+            if not backup_chat_id:
+                return False
+            chat = await self.telegram_api("getChat", {"chat_id": backup_chat_id})
+            pinned = (chat.get("result") or {}).get("pinned_message") or {}
+            document = pinned.get("document") or {}
+            file_id = document.get("file_id")
+            if not file_id:
+                logging.info("No pinned backup document found in BACKUP_CHAT_ID.")
+                return False
+
+            file_info = await self.telegram_api("getFile", {"file_id": file_id})
+            file_path = (file_info.get("result") or {}).get("file_path")
+            if not file_path:
+                return False
+
+            data = await self.download_telegram_file(file_path)
+            if not data:
+                return False
+
+            was_open = bool(self.db.conn)
+            if was_open:
+                await self.db.close()
+                self.db.conn = None
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            db_path.write_bytes(data)
+            if was_open:
+                await self.db.open()
+                await self.load_backup_chat_id_from_db()
+            logging.info("Restored SQLite database from pinned Telegram backup.")
+            return True
+        except Exception:
+            logging.exception("Database backup restore failed.")
+            return False
+
+    async def maybe_backup_database(self) -> None:
+        if not self.sqlite_backup_enabled():
+            return
+
+        now = time.time()
+        if now - self.last_backup_at < self.settings.backup_interval_seconds:
+            return
+        self.last_backup_at = now
+        await self.backup_database()
+
+    async def backup_database(self) -> None:
+        db_path = Path(self.settings.database_path)
+        if not db_path.exists() or db_path.stat().st_size <= 0:
+            return
+
+        try:
+            if self.db.conn:
+                await self.db.conn.execute("PRAGMA wal_checkpoint(FULL)")
+                await self.db.conn.commit()
+            doc = BufferedInputFile(db_path.read_bytes(), filename=db_path.name)
+            backup_chat_id = self.backup_chat_id()
+            sent = await self.bot.send_document(
+                backup_chat_id,
+                doc,
+                caption=f"OgreScanBot database backup {int(time.time())}\nIncludes calls, PNL history, and leaderboard data.",
+                disable_notification=True,
+            )
+            try:
+                await self.bot.pin_chat_message(
+                    backup_chat_id,
+                    sent.message_id,
+                    disable_notification=True,
+                )
+            except Exception:
+                logging.exception("Backup was sent, but pinning failed. Give the bot pin permission or pin manually.")
+            await self.send_leaderboard_backup_snapshot()
+        except Exception:
+            logging.exception("Database backup send failed.")
+
+    async def send_leaderboard_backup_snapshot(self) -> None:
+        try:
+            sections = []
+            for chat_id in await self.db.chat_ids(limit=10):
+                traders = await self.db.top_traders(
+                    chat_id,
+                    since_ts=None,
+                    min_hit_multiple=self.settings.min_multiple_for_hit,
+                    limit=3,
+                )
+                calls = await self.db.leaderboard(chat_id, since_ts=None, limit=5)
+                stats = await self.db.stats(chat_id, None, self.settings.min_multiple_for_hit)
+                sections.append((chat_id, traders, calls, stats))
+
+            text = format_leaderboard_backup_snapshot(int(time.time()), sections)
+            await self.bot.send_message(
+                self.backup_chat_id(),
+                text,
+                disable_notification=True,
+                parse_mode=None,
+            )
+        except Exception:
+            logging.exception("Leaderboard backup snapshot failed.")
+
+    async def telegram_api(self, method: str, params: dict) -> dict:
+        url = f"https://api.telegram.org/bot{self.settings.telegram_bot_token}/{method}"
+        async with self.dex._session.post(url, data=params) as response:
+            return await response.json(content_type=None)
+
+    async def download_telegram_file(self, file_path: str) -> bytes | None:
+        url = f"https://api.telegram.org/file/bot{self.settings.telegram_bot_token}/{file_path}"
+        async with self.dex._session.get(url) as response:
+            if response.status >= 400:
+                return None
+            data = await response.read()
+        return data or None
 
 
 def command_args(message: Message) -> list[str]:

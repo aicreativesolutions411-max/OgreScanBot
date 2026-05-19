@@ -18,6 +18,24 @@ def user_display_name(user) -> str:
     return user.username or name or str(user.id)
 
 
+def telegram_credit(user) -> str:
+    if not user:
+        return "unknown"
+    if user.username:
+        return f"@{html.escape(user.username)}"
+    name = " ".join(part for part in [user.first_name, user.last_name] if part).strip()
+    return html.escape(name or str(user.id))
+
+
+def format_x_post_embed(username: str, embed_url: str, user) -> str:
+    return (
+        f"<b>X Post</b> by @{html.escape(username)}\n"
+        f"{html.escape(embed_url)}\n\n"
+        f"Shared by {telegram_credit(user)}"
+        f"{powered_by_footer()}"
+    )
+
+
 def format_scan(token: TokenScan, call: CallRecord | None, is_new_call: bool, rug: RugSummary | None) -> str:
     ca = html.escape(token.address)
     title = html.escape(f"{token.name} (${token.symbol})")
@@ -63,6 +81,34 @@ def format_scan(token: TokenScan, call: CallRecord | None, is_new_call: bool, ru
     )
 
 
+def format_scan_caption(token: TokenScan, call: CallRecord | None, is_new_call: bool) -> str:
+    status = "New call" if is_new_call else "Already called"
+    caller = html.escape(call.caller_name) if call else "unknown"
+    called_at = money(call.initial_cap) if call else "n/a"
+    now = money(call.last_cap) if call else money(token.cap_for_tracking)
+    best = f"{call.peak_multiple:.2f}x" if call else "n/a"
+    ath = ath_value(call)
+    return (
+        f"<b>OgreScanBot</b>\n"
+        f"💊 <b>{html.escape(token.name)} (${html.escape(token.symbol)})</b>\n"
+        f"<code>{html.escape(token.address)}</code>\n"
+        f"└ #SOL | {html.escape(token.dex_id)} | {age_from_ms(token.created_at_ms)}\n\n"
+        f"📊 <b>Stats</b>\n"
+        f"├ USD <b>{price(token.price_usd)}</b> ({pct(token.price_change_h24)} 24h)\n"
+        f"├ MC <b>{money(token.market_cap)}</b> | LP <b>{money(token.liquidity_usd)}</b>\n"
+        f"├ Vol <b>{money(token.volume_h24)}</b> | 1H <b>{pct(token.price_change_h1)}</b>\n"
+        f"└ ATH <b>{ath}</b>\n\n"
+        f"🧌 <b>Call</b>\n"
+        f"├ {html.escape(status)} by <b>{caller}</b>\n"
+        f"└ Called <b>{called_at}</b> | Now <b>{now}</b> | Best <b>{best}</b>\n\n"
+        f"🔗 <b>Links</b>\n"
+        f"{tool_links(token)}\n\n"
+        f"🔎 <b>X</b>\n"
+        f"{x_search_links(token)}"
+        f"{powered_by_footer()}"
+    )
+
+
 def format_leaderboard(
     period: str,
     traders: list[TraderRecord],
@@ -70,38 +116,70 @@ def format_leaderboard(
     stats: dict[str, float | int],
 ) -> str:
     trader_rows = []
-    medals = ["1", "2", "3"]
+    medals = ["🥇", "🥈", "🥉"]
     for index, trader in enumerate(traders, start=1):
         prefix = medals[index - 1] if index <= 3 else str(index)
         trader_rows.append(
-            f"{prefix}. <b>{html.escape(trader.caller_name)}</b> "
-            f"[{trader.best_multiple:.2f}x] "
-            f"{trader.hits}/{trader.total_calls} hits"
+            f"{prefix} <b>{html.escape(trader.caller_name)}</b> "
+            f"[{trader.best_multiple:.2f}x] • {trader.hits}/{trader.total_calls} hits"
         )
     trader_body = "\n".join(trader_rows) if trader_rows else "No traders tracked for this period yet."
 
     call_rows = []
     for index, call in enumerate(calls, start=1):
-        prefix = medals[index - 1] if index <= 3 else str(index)
+        prefix = "🎉" if index <= 5 else "😎"
         call_rows.append(
-            f"{prefix}. <b>{html.escape(call.token_symbol)}</b> by "
+            f"{prefix} {index}. <b>{html.escape(call.token_symbol)}</b> » "
             f"{html.escape(call.caller_name)} [{call.peak_multiple:.2f}x]"
         )
     call_body = "\n".join(call_rows) if call_rows else "No calls tracked for this period yet."
     return (
-        f"<b>Leaderboard</b>\n\n"
-        f"<b>Top Traders</b>\n"
-        f"{trader_body}\n\n"
-        f"<b>Best Trades</b>\n"
-        f"{call_body}\n\n"
-        f"<b>Group Stats</b>\n"
-        f"|- Period   <b>{html.escape(period)}</b>\n"
-        f"|- Calls    <b>{int(stats['calls'])}</b>\n"
-        f"|- Hit Rate <b>{int(stats['hit_rate'])}%</b>\n"
-        f"|- Median   <b>{float(stats['median']):.2f}x</b>\n"
-        f"|- Return   <b>{float(stats['return']):.2f}x</b>"
+        f"🏆 <b>Leaderboard</b>\n\n"
+        f"👑 <b>Top Callers</b>\n"
+        f"├ {trader_body.replace(chr(10), chr(10) + '├ ')}\n\n"
+        f"📊 <b>Group Stats</b>\n"
+        f"├ Period   <b>{html.escape(period)}</b>\n"
+        f"├ Calls    <b>{int(stats['calls'])}</b>\n"
+        f"├ Hit Rate <b>{int(stats['hit_rate'])}%</b>\n"
+        f"├ Median   <b>{float(stats['median']):.2f}x</b>\n"
+        f"└ Return   <b>{float(stats['return']):.2f}x</b>\n\n"
+        f"💊 <b>Best Trades</b>\n"
+        f"{call_body}"
         f"{powered_by_footer()}"
     )
+
+
+def format_leaderboard_backup_snapshot(
+    generated_at: int,
+    sections: list[tuple[int, list[TraderRecord], list[CallRecord], dict[str, float | int]]],
+) -> str:
+    if not sections:
+        return "OgreScanBot leaderboard backup\nNo calls tracked yet."
+
+    lines = [
+        "OgreScanBot leaderboard backup",
+        f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(generated_at))}",
+        "",
+    ]
+    for chat_id, traders, calls, stats in sections[:10]:
+        lines.append(f"Chat {chat_id}")
+        lines.append(
+            f"Stats: {int(stats['calls'])} calls | {int(stats['hit_rate'])}% hit | "
+            f"best {float(stats['return']):.2f}x"
+        )
+        if traders:
+            lines.append("Top callers:")
+            for index, trader in enumerate(traders[:3], start=1):
+                lines.append(
+                    f"{index}. {trader.caller_name} [{trader.best_multiple:.2f}x] "
+                    f"{trader.hits}/{trader.total_calls} hits"
+                )
+        if calls:
+            lines.append("Best trades:")
+            for index, call in enumerate(calls[:5], start=1):
+                lines.append(f"{index}. ${call.token_symbol} by {call.caller_name} [{call.peak_multiple:.2f}x]")
+        lines.append("")
+    return "\n".join(lines)[:3800]
 
 
 def format_help(bot_name: str) -> str:
@@ -114,7 +192,8 @@ def format_help(bot_name: str) -> str:
         "|- /pnl &lt;ca or $ticker&gt;\n"
         "|- /flex &lt;ca or $ticker&gt;\n"
         "|- /leaderboard 1w\n"
-        "|- /lb 1d | /lb 1w | /lb 30d | /lb all"
+        "|- /lb 1d | /lb 1w | /lb 30d | /lb all\n"
+        "|- /backup"
         f"{powered_by_footer()}"
     )
 
@@ -232,8 +311,10 @@ def tool_links(token: TokenScan) -> str:
     address = html.escape(token.address)
     links = [
         f"<a href=\"{html.escape(token.pair_url)}\">DEX</a>",
-        f"<a href=\"https://app.bubblemaps.io/sol/token/{address}\">BUB</a>",
         f"<a href=\"https://rugcheck.xyz/tokens/{address}\">RUG</a>",
+        f"<a href=\"https://app.bubblemaps.io/sol/token/{address}\">BUB</a>",
+        f"<a href=\"https://solscan.io/token/{address}\">SOL</a>",
+        f"<a href=\"https://birdeye.so/token/{address}?chain=solana\">BIRD</a>",
         f"<a href=\"https://pump.fun/{address}\">PUMP</a>",
         f"<a href=\"https://gmgn.ai/sol/token/{address}\">GMGN</a>",
     ]

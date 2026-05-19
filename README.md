@@ -12,6 +12,7 @@ Solana-first Telegram scanner bot using free/public data sources.
 - Generates call-based PNL/flex cards with `/pnl <ca>` or `/flex <ca>`.
 - Pulls token metadata images/descriptions from Dexscreener and falls back to Pump.fun public metadata when available.
 - Adds quick links for BubbleMaps, RugCheck, Pump.fun, GMGN, DEX, and X searches for high-engagement recent posts.
+- Auto-embeds X/Twitter post links and credits the Telegram user who shared the link.
 
 ## Free data sources
 
@@ -20,6 +21,8 @@ Solana-first Telegram scanner bot using free/public data sources.
 - Optional RugCheck public report endpoint
 - Optional Pump.fun public metadata endpoint
 - Local SQLite database
+- Optional external Postgres database through `DATABASE_URL` for Render deploys that must remember calls across updates
+- Optional Telegram backup channel for SQLite persistence without Postgres
 
 Dexscreener API reference: https://docs.dexscreener.com/api/reference
 RugCheck token report pattern: https://api.rugcheck.xyz/v1/tokens/{mint}/report
@@ -53,6 +56,7 @@ python -m ogrescanbot
 /lb 1d
 /lb 1w
 /lb 30d
+/backup
 /help
 ```
 
@@ -67,3 +71,33 @@ python -m ogrescanbot
 ## Notes
 
 This MVP uses call-based PNL, not wallet PNL. That means `/pnl` shows "called at market cap vs current market cap" instead of exact wallet profit. It keeps the bot free and avoids paid wallet-history APIs.
+
+On Render, set `DATABASE_URL` to a free external Postgres connection string if you want calls and leaderboards to survive deploys. Render free web services use an ephemeral filesystem, so the local SQLite file can reset when the service restarts or redeploys.
+
+## Easier backup without Postgres
+
+Use a private Telegram backup channel:
+
+1. Create a private Telegram channel named something like `OgreScan Backups`.
+2. Add your bot as an admin.
+3. Give it permission to post messages and pin messages.
+4. Get the channel ID or use a public/private channel username if available.
+5. You do not need to find the numeric channel ID manually. After deploy, post this inside the backup channel:
+
+```text
+/setbackup
+```
+
+The bot learns the channel ID from that channel post. If you already know the ID, you can still set it manually:
+
+```text
+BACKUP_CHAT_ID=-100xxxxxxxxxx
+BACKUP_INTERVAL_SECONDS=60
+RESTORE_BACKUP_ON_START=true
+```
+
+The bot sends the SQLite database to that channel and pins the latest backup. That database includes calls, PNL history, and leaderboard data. The bot also posts a readable leaderboard snapshot showing top callers and best trades. On restart/redeploy, it restores from the pinned backup if the local database file is missing.
+
+Backups happen automatically on the configured interval and after call updates. Use `/backup` in Telegram to force a backup after setup.
+
+Telegram private invite links like `https://t.me/+...` cannot be used directly as a Bot API destination. `/setbackup` is the easy way around that because the bot learns the hidden numeric channel ID from Telegram.

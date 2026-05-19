@@ -16,7 +16,15 @@ services:
         value: OgreScanBot
       - key: DATABASE_PATH
         value: ogrescanbot.sqlite3
+      - key: DATABASE_URL
+        sync: false
       - key: ENABLE_RUGCHECK
         value: true
       - key: ENABLE_PUMP_METADATA
+        value: true
+      - key: BACKUP_CHAT_ID
+        sync: false
+      - key: BACKUP_INTERVAL_SECONDS
+        value: 60
+      - key: RESTORE_BACKUP_ON_START
         value: true

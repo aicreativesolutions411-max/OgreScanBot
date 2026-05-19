@@ -3,6 +3,7 @@ from __future__ import annotations
 import statistics
 import time
 from dataclasses import dataclass
+from typing import Any
 
 import aiosqlite
 
@@ -40,8 +41,43 @@ class Database:
     def __init__(self, path: str) -> None:
         self.path = path
         self.conn: aiosqlite.Connection | None = None
+        self.pool: Any | None = None
+        self.backend = "postgres" if path.startswith(("postgres://", "postgresql://")) else "sqlite"
 
     async def open(self) -> None:
+        if self.backend == "postgres":
+            import asyncpg
+
+            self.pool = await asyncpg.create_pool(dsn=self.path, min_size=1, max_size=5)
+            async with self.pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS calls (
+                        id BIGSERIAL PRIMARY KEY,
+                        chat_id BIGINT NOT NULL,
+                        token_address TEXT NOT NULL,
+                        token_name TEXT NOT NULL,
+                        token_symbol TEXT NOT NULL,
+                        caller_user_id BIGINT NOT NULL,
+                        caller_name TEXT NOT NULL,
+                        initial_cap DOUBLE PRECISION NOT NULL,
+                        peak_cap DOUBLE PRECISION NOT NULL,
+                        peak_multiple DOUBLE PRECISION NOT NULL,
+                        last_cap DOUBLE PRECISION NOT NULL,
+                        created_at BIGINT NOT NULL,
+                        updated_at BIGINT NOT NULL,
+                        UNIQUE(chat_id, token_address)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_calls_chat_created ON calls(chat_id, created_at);
+                    CREATE INDEX IF NOT EXISTS idx_calls_chat_peak ON calls(chat_id, peak_multiple DESC);
+                    CREATE TABLE IF NOT EXISTS bot_settings (
+                        key TEXT PRIMARY KEY,
+                        value TEXT NOT NULL
+                    );
+                    """
+                )
+            return
+
         self.conn = await aiosqlite.connect(self.path)
         self.conn.row_factory = aiosqlite.Row
         await self.conn.execute("PRAGMA journal_mode=WAL")
@@ -66,11 +102,17 @@ class Database:
             );
             CREATE INDEX IF NOT EXISTS idx_calls_chat_created ON calls(chat_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_calls_chat_peak ON calls(chat_id, peak_multiple DESC);
+            CREATE TABLE IF NOT EXISTS bot_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             """
         )
         await self.conn.commit()
 
     async def close(self) -> None:
+        if self.pool:
+            await self.pool.close()
         if self.conn:
             await self.conn.close()
 
@@ -81,7 +123,6 @@ class Database:
         caller_user_id: int,
         caller_name: str,
     ) -> tuple[CallRecord, bool]:
-        conn = self._conn()
         now = int(time.time())
         cap = token.cap_for_tracking
         if not cap or cap <= 0:
@@ -91,6 +132,26 @@ class Database:
         if existing:
             peak_cap = max(existing.peak_cap, cap)
             peak_multiple = max(existing.peak_multiple, peak_cap / existing.initial_cap)
+            if self.backend == "postgres":
+                async with self._pool().acquire() as pg:
+                    await pg.execute(
+                        """
+                        UPDATE calls
+                        SET token_name = $1, token_symbol = $2, peak_cap = $3, peak_multiple = $4,
+                            last_cap = $5, updated_at = $6
+                        WHERE id = $7
+                        """,
+                        token.name,
+                        token.symbol,
+                        peak_cap,
+                        peak_multiple,
+                        cap,
+                        now,
+                        existing.id,
+                    )
+                return (await self.get_call(chat_id, token.address)) or existing, False
+
+            conn = self._conn()
             await conn.execute(
                 """
                 UPDATE calls
@@ -103,6 +164,34 @@ class Database:
             await conn.commit()
             return (await self.get_call(chat_id, token.address)) or existing, False
 
+        if self.backend == "postgres":
+            async with self._pool().acquire() as pg:
+                await pg.execute(
+                    """
+                    INSERT INTO calls (
+                        chat_id, token_address, token_name, token_symbol, caller_user_id, caller_name,
+                        initial_cap, peak_cap, peak_multiple, last_cap, created_at, updated_at
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                    """,
+                    chat_id,
+                    token.address,
+                    token.name,
+                    token.symbol,
+                    caller_user_id,
+                    caller_name,
+                    cap,
+                    cap,
+                    1.0,
+                    cap,
+                    now,
+                    now,
+                )
+            record = await self.get_call(chat_id, token.address)
+            if not record:
+                raise RuntimeError("Inserted call could not be loaded.")
+            return record, True
+
+        conn = self._conn()
         await conn.execute(
             """
             INSERT INTO calls (
@@ -132,6 +221,15 @@ class Database:
         return record, True
 
     async def get_call(self, chat_id: int, token_address: str) -> CallRecord | None:
+        if self.backend == "postgres":
+            async with self._pool().acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT * FROM calls WHERE chat_id = $1 AND token_address = $2",
+                    chat_id,
+                    token_address,
+                )
+            return _row_to_call(row) if row else None
+
         conn = self._conn()
         cursor = await conn.execute(
             "SELECT * FROM calls WHERE chat_id = ? AND token_address = ?",
@@ -142,6 +240,33 @@ class Database:
         return _row_to_call(row) if row else None
 
     async def leaderboard(self, chat_id: int, since_ts: int | None = None, limit: int = 10) -> list[CallRecord]:
+        if self.backend == "postgres":
+            async with self._pool().acquire() as conn:
+                if since_ts:
+                    rows = await conn.fetch(
+                        """
+                        SELECT * FROM calls
+                        WHERE chat_id = $1 AND created_at >= $2
+                        ORDER BY peak_multiple DESC, peak_cap DESC
+                        LIMIT $3
+                        """,
+                        chat_id,
+                        since_ts,
+                        limit,
+                    )
+                else:
+                    rows = await conn.fetch(
+                        """
+                        SELECT * FROM calls
+                        WHERE chat_id = $1
+                        ORDER BY peak_multiple DESC, peak_cap DESC
+                        LIMIT $2
+                        """,
+                        chat_id,
+                        limit,
+                    )
+            return [_row_to_call(row) for row in rows]
+
         conn = self._conn()
         if since_ts:
             cursor = await conn.execute(
@@ -174,6 +299,51 @@ class Database:
         min_hit_multiple: float = 2.0,
         limit: int = 5,
     ) -> list[TraderRecord]:
+        if self.backend == "postgres":
+            async with self._pool().acquire() as conn:
+                if since_ts:
+                    rows = await conn.fetch(
+                        """
+                        SELECT
+                            caller_user_id,
+                            caller_name,
+                            COUNT(*) AS total_calls,
+                            MAX(peak_multiple) AS best_multiple,
+                            AVG(peak_multiple) AS avg_multiple,
+                            SUM(CASE WHEN peak_multiple >= $1 THEN 1 ELSE 0 END) AS hits
+                        FROM calls
+                        WHERE chat_id = $2 AND created_at >= $3
+                        GROUP BY caller_user_id, caller_name
+                        ORDER BY best_multiple DESC, hits DESC, total_calls DESC
+                        LIMIT $4
+                        """,
+                        min_hit_multiple,
+                        chat_id,
+                        since_ts,
+                        limit,
+                    )
+                else:
+                    rows = await conn.fetch(
+                        """
+                        SELECT
+                            caller_user_id,
+                            caller_name,
+                            COUNT(*) AS total_calls,
+                            MAX(peak_multiple) AS best_multiple,
+                            AVG(peak_multiple) AS avg_multiple,
+                            SUM(CASE WHEN peak_multiple >= $1 THEN 1 ELSE 0 END) AS hits
+                        FROM calls
+                        WHERE chat_id = $2
+                        GROUP BY caller_user_id, caller_name
+                        ORDER BY best_multiple DESC, hits DESC, total_calls DESC
+                        LIMIT $3
+                        """,
+                        min_hit_multiple,
+                        chat_id,
+                        limit,
+                    )
+            return [_row_to_trader(row) for row in rows]
+
         conn = self._conn()
         if since_ts:
             cursor = await conn.execute(
@@ -216,6 +386,18 @@ class Database:
         return [_row_to_trader(row) for row in rows]
 
     async def stats(self, chat_id: int, since_ts: int | None, min_hit_multiple: float) -> dict[str, float | int]:
+        if self.backend == "postgres":
+            async with self._pool().acquire() as conn:
+                if since_ts:
+                    rows = await conn.fetch(
+                        "SELECT peak_multiple FROM calls WHERE chat_id = $1 AND created_at >= $2",
+                        chat_id,
+                        since_ts,
+                    )
+                else:
+                    rows = await conn.fetch("SELECT peak_multiple FROM calls WHERE chat_id = $1", chat_id)
+            return _stats_from_rows(rows, min_hit_multiple)
+
         conn = self._conn()
         params: tuple[int, ...] | tuple[int, int]
         if since_ts:
@@ -227,21 +409,84 @@ class Database:
             cursor = await conn.execute("SELECT peak_multiple FROM calls WHERE chat_id = ?", (chat_id,))
         rows = await cursor.fetchall()
         await cursor.close()
-        multiples = [float(row["peak_multiple"]) for row in rows]
-        if not multiples:
-            return {"calls": 0, "hit_rate": 0, "median": 0, "return": 0}
-        hits = [value for value in multiples if value >= min_hit_multiple]
-        return {
-            "calls": len(multiples),
-            "hit_rate": round((len(hits) / len(multiples)) * 100),
-            "median": statistics.median(multiples),
-            "return": max(multiples),
-        }
+        return _stats_from_rows(rows, min_hit_multiple)
+
+    async def chat_ids(self, limit: int = 50) -> list[int]:
+        if self.backend == "postgres":
+            async with self._pool().acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT chat_id, MAX(updated_at) AS last_update
+                    FROM calls
+                    GROUP BY chat_id
+                    ORDER BY last_update DESC
+                    LIMIT $1
+                    """,
+                    limit,
+                )
+            return [int(row["chat_id"]) for row in rows]
+
+        conn = self._conn()
+        cursor = await conn.execute(
+            """
+            SELECT chat_id, MAX(updated_at) AS last_update
+            FROM calls
+            GROUP BY chat_id
+            ORDER BY last_update DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        rows = await cursor.fetchall()
+        await cursor.close()
+        return [int(row["chat_id"]) for row in rows]
+
+    async def set_setting(self, key: str, value: str) -> None:
+        if self.backend == "postgres":
+            async with self._pool().acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO bot_settings(key, value)
+                    VALUES ($1, $2)
+                    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+                    """,
+                    key,
+                    value,
+                )
+            return
+
+        conn = self._conn()
+        await conn.execute(
+            """
+            INSERT INTO bot_settings(key, value)
+            VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            (key, value),
+        )
+        await conn.commit()
+
+    async def get_setting(self, key: str) -> str | None:
+        if self.backend == "postgres":
+            async with self._pool().acquire() as conn:
+                row = await conn.fetchrow("SELECT value FROM bot_settings WHERE key = $1", key)
+            return str(row["value"]) if row else None
+
+        conn = self._conn()
+        cursor = await conn.execute("SELECT value FROM bot_settings WHERE key = ?", (key,))
+        row = await cursor.fetchone()
+        await cursor.close()
+        return str(row["value"]) if row else None
 
     def _conn(self) -> aiosqlite.Connection:
         if not self.conn:
             raise RuntimeError("Database is not open.")
         return self.conn
+
+    def _pool(self):
+        if not self.pool:
+            raise RuntimeError("Postgres pool is not open.")
+        return self.pool
 
 
 def period_to_since(period: str | None) -> tuple[str, int | None]:
@@ -288,3 +533,16 @@ def _row_to_trader(row: aiosqlite.Row) -> TraderRecord:
         avg_multiple=float(row["avg_multiple"]),
         hits=int(row["hits"]),
     )
+
+
+def _stats_from_rows(rows, min_hit_multiple: float) -> dict[str, float | int]:
+    multiples = [float(row["peak_multiple"]) for row in rows]
+    if not multiples:
+        return {"calls": 0, "hit_rate": 0, "median": 0, "return": 0}
+    hits = [value for value in multiples if value >= min_hit_multiple]
+    return {
+        "calls": len(multiples),
+        "hit_rate": round((len(hits) / len(multiples)) * 100),
+        "median": statistics.median(multiples),
+        "return": max(multiples),
+    }
