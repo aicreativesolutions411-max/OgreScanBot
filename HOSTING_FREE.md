@@ -76,6 +76,8 @@ Easier non-Postgres option:
 
 That lets the bot learn the hidden channel ID automatically. If you already know the channel ID, you can set:
 
+If Telegram inserts the bot username, `/setbackup@YourBotName` works too.
+
 ```text
 BACKUP_CHAT_ID=-100xxxxxxxxxx
 BACKUP_INTERVAL_SECONDS=60

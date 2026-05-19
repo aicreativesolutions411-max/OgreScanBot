@@ -90,6 +90,8 @@ Use a private Telegram backup channel:
 
 The bot learns the channel ID from that channel post. If you already know the ID, you can still set it manually:
 
+If Telegram inserts the bot username, `/setbackup@YourBotName` is fine too.
+
 ```text
 BACKUP_CHAT_ID=-100xxxxxxxxxx
 BACKUP_INTERVAL_SECONDS=60

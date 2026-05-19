@@ -105,12 +105,13 @@ class OgreScanApp:
 
     def _register_handlers(self) -> None:
         self.dp.message.register(self.help_handler, Command("start", "help"))
+        self.dp.message.register(self.set_backup_channel_command, F.text.startswith(("/setbackup", "/backuphere")))
         self.dp.message.register(self.scan_command, Command("scan"))
         self.dp.message.register(self.pnl_command, Command("pnl", "flex"))
         self.dp.message.register(self.leaderboard_command, Command("lb", "leaderboard"))
         self.dp.message.register(self.backup_command, Command("backup"))
         self.dp.message.register(self.auto_scan_message, F.text)
-        self.dp.channel_post.register(self.set_backup_channel_command, Command("setbackup", "backuphere"))
+        self.dp.channel_post.register(self.set_backup_channel_command, F.text.startswith(("/setbackup", "/backuphere")))
 
     async def help_handler(self, message: Message) -> None:
         await message.reply(format_help(self.settings.bot_name), disable_web_page_preview=True)
@@ -189,7 +190,9 @@ class OgreScanApp:
 
     async def set_backup_channel_command(self, message: Message) -> None:
         await self.save_backup_chat_id(str(message.chat.id))
-        await message.answer("OgreScanBot backup channel set. I will auto-backup here.")
+        await message.answer(
+            f"OgreScanBot backup channel set.\nChat ID: {message.chat.id}\nI will auto-backup here."
+        )
         self.start_auto_backup_loop()
         restored = False
         if self.db.conn and not await self.db.chat_ids(limit=1):
