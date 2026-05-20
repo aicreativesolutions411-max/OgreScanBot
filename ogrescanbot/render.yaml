@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: ogrescanbot
+    runtime: docker
+    plan: free
+    envVars:
+      - key: RUN_MODE
+        value: webhook
+      - key: HOST
+        value: 0.0.0.0
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: WEBHOOK_URL
+        sync: false
+      - key: BOT_NAME
+        value: OgreScanBot
+      - key: DATABASE_PATH
+        value: ogrescanbot.sqlite3
+      - key: DATABASE_URL
+        sync: false
+      - key: ENABLE_RUGCHECK
+        value: true
+      - key: ENABLE_PUMP_METADATA
+        value: true
+      - key: CALL_UPDATE_INTERVAL_SECONDS
+        value: 180
+      - key: CALL_UPDATE_LIMIT
+        value: 150
+      - key: BACKUP_CHAT_ID
+        sync: false
+      - key: BACKUP_INTERVAL_SECONDS
+        value: 60
+      - key: RESTORE_BACKUP_ON_START
+        value: true
