@@ -566,11 +566,12 @@ def _row_to_trader(row: aiosqlite.Row) -> TraderRecord:
 def _stats_from_rows(rows, min_hit_multiple: float) -> dict[str, float | int]:
     multiples = [float(row["peak_multiple"]) for row in rows]
     if not multiples:
-        return {"calls": 0, "hit_rate": 0, "median": 0, "return": 0}
+        return {"calls": 0, "hit_rate": 0, "median": 0, "return": 0, "avg": 0}
     hits = [value for value in multiples if value >= min_hit_multiple]
     return {
         "calls": len(multiples),
         "hit_rate": round((len(hits) / len(multiples)) * 100),
         "median": statistics.median(multiples),
         "return": max(multiples),
+        "avg": statistics.mean(multiples),
     }

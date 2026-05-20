@@ -141,34 +141,38 @@ def format_leaderboard(
 ) -> str:
     trader_rows = []
     medals = ["🥇", "🥈", "🥉"]
-    for index, trader in enumerate(traders, start=1):
-        prefix = medals[index - 1] if index <= 3 else str(index)
+    tree = ["├", "├", "└"]
+    for index, trader in enumerate(traders[:3], start=1):
+        branch = tree[index - 1]
+        medal = medals[index - 1]
         trader_rows.append(
-            f"{prefix} <b>{html.escape(trader.caller_name)}</b> "
-            f"[{trader.best_multiple:.2f}x] • {trader.hits}/{trader.total_calls} hits"
+            f"{branch}{medal} <b>{html.escape(trader.caller_name)}</b> "
+            f"[{trader.best_multiple:.1f} pts]"
         )
-    trader_body = "\n".join(trader_rows) if trader_rows else "No traders tracked for this period yet."
+    trader_body = "\n".join(trader_rows) if trader_rows else "└ No callers tracked yet"
 
     call_rows = []
     for index, call in enumerate(calls, start=1):
-        prefix = "🎉" if index <= 5 else "😎"
+        prefix = "🎉" if index <= 3 else "😎"
+        marker = "💊" if index in {2, 7, 8, 9} else "🟪"
         call_rows.append(
-            f"{prefix} {index}. <b>{html.escape(call.token_symbol)}</b> » "
-            f"{html.escape(call.caller_name)} [{call.peak_multiple:.2f}x]"
+            f"{prefix}{marker} {index} <b>{html.escape(call.token_symbol)}</b> » "
+            f"<i>{html.escape(call.caller_name)}</i> [<b>{call.peak_multiple:.1f}x</b>]"
         )
     call_body = "\n".join(call_rows) if call_rows else "No calls tracked for this period yet."
+    avg = float(stats.get("avg", 0))
     return (
         f"🏆 <b>Leaderboard</b>\n\n"
         f"👑 <b>Top Callers</b>\n"
-        f"├ {trader_body.replace(chr(10), chr(10) + '├ ')}\n\n"
+        f"{trader_body}\n\n"
         f"📊 <b>Group Stats</b>\n"
-        f"├ Period   <b>{html.escape(period)}</b>\n"
-        f"├ Calls    <b>{int(stats['calls'])}</b>\n"
-        f"├ Hit Rate <b>{int(stats['hit_rate'])}%</b>\n"
-        f"├ Median   <b>{float(stats['median']):.2f}x</b>\n"
-        f"└ Return   <b>{float(stats['return']):.2f}x</b>\n\n"
-        f"💊 <b>Best Trades</b>\n"
-        f"{call_body}"
+        f"├Period   <b>{html.escape(period)}</b>\n"
+        f"├Calls    <b>{int(stats['calls'])}</b>\n"
+        f"├Hit Rate <b>{int(stats['hit_rate'])}%</b>\n"
+        f"├Median   <b>{leaderboard_median_pct(stats)}</b>\n"
+        f"└Return   <b>{float(stats['return']):.1f}x</b> (<i>Avg: {avg:.1f}x</i>)\n\n"
+        f"<blockquote>{call_body}</blockquote>\n\n"
+        f"📚 <a href=\"{OGRE_WEBSITE_URL}\">Learn More!</a>"
         f"{powered_by_footer()}"
     )
 
@@ -275,6 +279,12 @@ def multiple_pct(value: float | None) -> str:
     if value is None:
         return "n/a"
     return f"{(value - 1.0) * 100:+.0f}%"
+
+
+def leaderboard_median_pct(stats: dict[str, float | int]) -> str:
+    if int(stats.get("calls", 0)) <= 0:
+        return "0%"
+    return multiple_pct(float(stats.get("median", 0)))
 
 
 def security_status(token: TokenScan, rug: RugSummary | None) -> str:

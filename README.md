@@ -11,6 +11,7 @@ Solana-first Telegram scanner bot using free/public data sources.
 - Refreshes tracked calls from free APIs in the background so ATH/peak X keeps moving.
 - Tracks each chat separately.
 - Builds leaderboards based on the biggest X return from a single call.
+- Leaderboards use a compact tree-and-quote layout for top callers, group stats, and best trades.
 - Generates call-based PNL/flex cards with `/pnl <ca>` or `/flex <ca>`.
 - PNL/flex cards use text over the image with no stat boxes, showing a big green call-to-ATH X or a big red loss.
 - Pulls token metadata images/descriptions from Dexscreener and falls back to Pump.fun public metadata when available.

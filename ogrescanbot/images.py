@@ -30,30 +30,27 @@ def build_pnl_card(token: TokenScan, call: CallRecord, title: str = "PNL") -> By
     glow_mid = "#0b9f2d" if metrics["positive"] else "#b31818"
 
     font_result = _headline_font(188 if len(headline) <= 6 else 162)
-    font_percent = _font(58, bold=True)
-    font_brand = _font(86, bold=True)
-    font_label = _font(28, bold=True)
-    font_mid = _font(42, bold=True)
-    font_small = _font(32, bold=True)
-    font_tiny = _font(24, bold=True)
+    font_percent = _font(72, bold=True)
+    font_brand = _font(104, bold=True)
+    font_label = _font(38, bold=True)
+    font_mid = _font(56, bold=True)
+    font_small = _font(42, bold=True)
+    font_tiny = _font(32, bold=True)
+    font_footer = _font(28, bold=True)
 
     overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
     overlay_draw = ImageDraw.Draw(overlay, "RGBA")
     overlay_draw.rectangle((0, 0, width, height), fill=(0, 18, 6, 45))
     overlay_draw.polygon([(610, 0), (width, 0), (width, height), (760, height)], fill=(0, 0, 0, 142))
-    overlay_draw.rectangle((0, height - 64, width, height), fill=(0, 0, 0, 105))
     image = Image.alpha_composite(image, overlay)
     draw = ImageDraw.Draw(image, "RGBA")
 
-    border = (44, 255, 82, 135) if metrics["positive"] else (255, 51, 51, 135)
-    draw.rounded_rectangle((44, 44, width - 44, height - 44), radius=28, outline=border, width=2)
-
-    _shadow_text(draw, (78, 82), title.upper(), font=font_label, fill=accent)
-    _shadow_text(draw, (78, 128), _shorten(f"{token.name} (${token.symbol})", 30), font=font_mid, fill="#ffffff")
-    _shadow_text(draw, (width // 2, 36), _shorten(token.name, 16), font=font_tiny, fill=accent_soft, anchor="mm")
+    _shadow_text(draw, (78, 92), title.upper(), font=font_label, fill=accent)
+    _shadow_text(draw, (78, 154), _shorten(f"{token.name} (${token.symbol})", 24), font=font_mid, fill="#ffffff")
+    _shadow_text(draw, (width // 2, 40), _shorten(token.name, 16), font=font_tiny, fill=accent_soft, anchor="mm")
 
     _shadow_text(draw, (width - 78, 132), "OGRE", font=font_brand, fill="#ffffff", anchor="ra")
-    _shadow_text(draw, (width - 82, 210), f"called at {money(call.initial_cap)}", font=font_mid, fill="#f4fff6", anchor="ra")
+    _shadow_text(draw, (width - 82, 222), f"called at {money(call.initial_cap)}", font=font_mid, fill="#f4fff6", anchor="ra")
 
     _spray_text(
         image,
@@ -65,16 +62,17 @@ def build_pnl_card(token: TokenScan, call: CallRecord, title: str = "PNL") -> By
         glow_mid=glow_mid,
     )
     draw = ImageDraw.Draw(image, "RGBA")
-    _shadow_text(draw, (960, 486), str(metrics["percent"]), font=font_percent, fill=accent_soft, anchor="mm")
-    _shadow_text(draw, (960, 538), f"by {_shorten(call.caller_name, 20).upper()}", font=font_small, fill="#ffffff", anchor="mm")
-    _shadow_text(draw, (960, 590), str(metrics["caption"]), font=font_tiny, fill="#f4fff6", anchor="mm")
+    _shadow_text(draw, (960, 500), str(metrics["percent"]), font=font_percent, fill=accent_soft, anchor="mm")
+    _shadow_text(draw, (960, 565), f"by {_shorten(call.caller_name, 16).upper()}", font=font_small, fill="#ffffff", anchor="mm")
+    _shadow_text(draw, (960, 616), str(metrics["caption"]), font=font_tiny, fill="#f4fff6", anchor="mm")
 
     detail = f"ATH {money(call.peak_cap)}  |  now {money(call.last_cap)}  |  {metrics['current_x']}"
-    _shadow_text(draw, (960, 632), detail, font=font_tiny, fill=accent_soft, anchor="mm")
+    _shadow_text(draw, (960, 658), detail, font=font_tiny, fill=accent_soft, anchor="mm")
 
     short_ca = f"{token.address[:6]}...{token.address[-6:]}"
-    _shadow_text(draw, (width - 74, height - 24), "@OgreScanBot", fill="#f4fff6", font=font_tiny, anchor="ra")
-    _shadow_text(draw, (74, height - 24), short_ca, fill="#c4d8c7", font=font_tiny)
+    footer_y = height - 46
+    _shadow_text(draw, (width - 74, footer_y), "@OgreScanBot", fill="#f4fff6", font=font_footer, anchor="ra")
+    _shadow_text(draw, (74, footer_y), short_ca, fill="#c4d8c7", font=font_footer)
 
     output = BytesIO()
     image.convert("RGB").save(output, format="PNG")
@@ -171,7 +169,6 @@ def _load_background(width: int, height: int) -> Image.Image:
     overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     overlay_draw = ImageDraw.Draw(overlay)
     overlay_draw.rectangle((0, 0, width, height), fill=(0, 20, 8, 58))
-    overlay_draw.rectangle((690, 0, width, height), fill=(0, 0, 0, 105))
     return Image.alpha_composite(image.convert("RGBA"), overlay)
 
 
@@ -207,8 +204,8 @@ def _pnl_metrics(call: CallRecord) -> dict[str, object]:
     return_pct = (current_multiple - 1.0) * 100
     return {
         "positive": False,
-        "headline": f"{return_pct:.0f}%",
-        "percent": f"{current_multiple:.2f}X",
+        "headline": f"{current_multiple:.2f}X",
+        "percent": f"{return_pct:.0f}%",
         "caption": "CURRENT FROM CALL",
         "current_x": f"{current_multiple:.2f}X",
     }
