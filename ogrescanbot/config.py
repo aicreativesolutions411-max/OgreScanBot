@@ -4,6 +4,11 @@ import os
 from dotenv import load_dotenv
 
 
+DEFAULT_TICKER_ALIASES = {
+    "OGRE": "5RAZMWd9RiKfodLPQ73cFk4CMoJzTUsATUoRdDThpump",
+}
+
+
 @dataclass(frozen=True)
 class Settings:
     telegram_bot_token: str
@@ -23,6 +28,7 @@ class Settings:
     restore_backup_on_start: bool
     call_update_interval_seconds: int
     call_update_limit: int
+    ticker_aliases: dict[str, str]
 
 
 def load_settings() -> Settings:
@@ -53,4 +59,20 @@ def load_settings() -> Settings:
         restore_backup_on_start=os.getenv("RESTORE_BACKUP_ON_START", "true").lower() in {"1", "true", "yes", "on"},
         call_update_interval_seconds=int(os.getenv("CALL_UPDATE_INTERVAL_SECONDS", "180")),
         call_update_limit=int(os.getenv("CALL_UPDATE_LIMIT", "150")),
+        ticker_aliases=parse_ticker_aliases(os.getenv("TICKER_ALIASES", "")),
     )
+
+
+def parse_ticker_aliases(value: str) -> dict[str, str]:
+    aliases = dict(DEFAULT_TICKER_ALIASES)
+    for item in value.split(","):
+        if not item.strip():
+            continue
+        if "=" not in item:
+            continue
+        ticker, address = item.split("=", 1)
+        ticker = ticker.strip().upper().removeprefix("$")
+        address = address.strip()
+        if ticker and address:
+            aliases[ticker] = address
+    return aliases

@@ -26,6 +26,8 @@ services:
         value: 180
       - key: CALL_UPDATE_LIMIT
         value: 150
+      - key: TICKER_ALIASES
+        value: OGRE=5RAZMWd9RiKfodLPQ73cFk4CMoJzTUsATUoRdDThpump
       - key: BACKUP_CHAT_ID
         sync: false
       - key: BACKUP_INTERVAL_SECONDS

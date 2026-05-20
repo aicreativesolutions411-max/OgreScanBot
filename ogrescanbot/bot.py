@@ -300,6 +300,7 @@ class OgreScanApp:
         return normalize_image_bytes(data)
 
     async def resolve_token(self, query: str, include_paid: bool = True):
+        query = self.resolve_ticker_alias(query)
         token = await self.dex.scan_solana_token(query)
         if token and self.pump:
             token = token.with_pump_metadata(await self.pump.metadata(token.address))
@@ -317,6 +318,13 @@ class OgreScanApp:
         if paid is None:
             return token
         return replace(token, dex_paid=bool(token.dex_paid or paid))
+
+    def resolve_ticker_alias(self, query: str) -> str:
+        clean = str(query or "").strip()
+        if is_solana_address(clean):
+            return clean
+        alias = self.settings.ticker_aliases.get(clean.upper().removeprefix("$"))
+        return alias or clean
 
     def start_auto_backup_loop(self) -> None:
         if not self.sqlite_backup_enabled() or self.backup_task:

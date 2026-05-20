@@ -6,6 +6,7 @@ Solana-first Telegram scanner bot using free/public data sources.
 
 - Auto-detects Solana contract addresses, supported token links, and `$ticker` mentions in group chats.
 - Scans tokens with Dexscreener.
+- Uses exact ticker aliases before search, so `$OGRE` resolves to the official OgreCoin contract.
 - Records the first caller for each token in each chat.
 - Refreshes tracked calls from free APIs in the background so ATH/peak X keeps moving.
 - Tracks each chat separately.
@@ -74,6 +75,14 @@ python -m ogrescanbot
 - A hit is any call that reaches `MIN_MULTIPLE_FOR_HIT`, default `2.0x`.
 
 `CALL_UPDATE_INTERVAL_SECONDS` controls the live API refresh loop, default `180`. `CALL_UPDATE_LIMIT` controls how many older tracked calls are refreshed per loop, default `150`.
+
+`TICKER_ALIASES` lets you force exact ticker matches before Dexscreener search. It defaults to:
+
+```text
+OGRE=5RAZMWd9RiKfodLPQ73cFk4CMoJzTUsATUoRdDThpump
+```
+
+Add more with commas, for example `OGRE=address,ABC=address2`.
 
 ## Notes
 
