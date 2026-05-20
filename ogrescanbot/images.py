@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from io import BytesIO
 from pathlib import Path
+import random
 from typing import TYPE_CHECKING
 
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, UnidentifiedImageError
@@ -28,7 +29,7 @@ def build_pnl_card(token: TokenScan, call: CallRecord, title: str = "PNL") -> By
     glow_dark = "#004b12" if metrics["positive"] else "#4b0000"
     glow_mid = "#0b9f2d" if metrics["positive"] else "#b31818"
 
-    font_result = _font(178 if len(headline) <= 6 else 152, bold=True)
+    font_result = _headline_font(188 if len(headline) <= 6 else 162)
     font_percent = _font(58, bold=True)
     font_brand = _font(86, bold=True)
     font_label = _font(28, bold=True)
@@ -54,7 +55,7 @@ def build_pnl_card(token: TokenScan, call: CallRecord, title: str = "PNL") -> By
     _shadow_text(draw, (width - 78, 132), "OGRE", font=font_brand, fill="#ffffff", anchor="ra")
     _shadow_text(draw, (width - 82, 210), f"called at {money(call.initial_cap)}", font=font_mid, fill="#f4fff6", anchor="ra")
 
-    _glow_text(
+    _spray_text(
         image,
         (960, 365),
         headline,
@@ -246,6 +247,71 @@ def _glow_text(
     draw.text((x, y), text, fill=fill, font=font, anchor="mm")
 
 
+def _spray_text(
+    image: Image.Image,
+    xy: tuple[int, int],
+    text: str,
+    font: ImageFont.ImageFont,
+    fill: str,
+    glow_dark: str,
+    glow_mid: str,
+) -> None:
+    x, y = xy
+    seed = sum((index + 1) * ord(char) for index, char in enumerate(text)) + x * 17 + y * 31
+    rng = random.Random(seed)
+
+    mask = Image.new("L", image.size, 0)
+    mask_draw = ImageDraw.Draw(mask)
+    mask_draw.text((x, y), text, fill=255, font=font, anchor="mm", stroke_width=7, stroke_fill=255)
+    bbox = mask.getbbox()
+    if not bbox:
+        return
+
+    for radius, color in [(14, glow_dark), (7, glow_mid)]:
+        glow = Image.new("RGBA", image.size, (0, 0, 0, 0))
+        glow.putalpha(mask.filter(ImageFilter.GaussianBlur(radius)))
+        glow_color = Image.new("RGBA", image.size, _hex_rgba(color, 180))
+        image.alpha_composite(Image.composite(glow_color, Image.new("RGBA", image.size, (0, 0, 0, 0)), glow.split()[-1]))
+
+    spray = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    spray_draw = ImageDraw.Draw(spray, "RGBA")
+    spray_mask = mask.filter(ImageFilter.GaussianBlur(8))
+    left, top, right, bottom = bbox
+    for _ in range(520):
+        px = rng.randint(max(0, left - 42), min(image.width - 1, right + 42))
+        py = rng.randint(max(0, top - 34), min(image.height - 1, bottom + 34))
+        strength = spray_mask.getpixel((px, py))
+        if strength <= rng.randint(8, 170):
+            continue
+        dot = rng.choice([1, 1, 1, 2, 2, 3, 4])
+        alpha = rng.randint(70, 195)
+        spray_draw.ellipse((px - dot, py - dot, px + dot, py + dot), fill=_hex_rgba(fill, alpha))
+    image.alpha_composite(spray)
+
+    text_layer = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    text_draw = ImageDraw.Draw(text_layer)
+    text_draw.text(
+        (x + 9, y + 12),
+        text,
+        fill=(0, 0, 0, 215),
+        font=font,
+        anchor="mm",
+        stroke_width=10,
+        stroke_fill=(0, 0, 0, 210),
+    )
+    for ox, oy in [(-2, 1), (2, -1), (0, 0)]:
+        text_draw.text(
+            (x + ox, y + oy),
+            text,
+            fill=fill,
+            font=font,
+            anchor="mm",
+            stroke_width=6,
+            stroke_fill=glow_dark,
+        )
+    image.alpha_composite(text_layer)
+
+
 def money(value: float | None) -> str:
     if value is None:
         return "n/a"
@@ -263,6 +329,27 @@ def _shorten(text: str, limit: int) -> str:
     if len(clean) <= limit:
         return clean
     return f"{clean[: max(0, limit - 3)]}..."
+
+
+def _hex_rgba(color: str, alpha: int) -> tuple[int, int, int, int]:
+    value = color.lstrip("#")
+    if len(value) != 6:
+        return (255, 255, 255, alpha)
+    return (int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16), alpha)
+
+
+def _headline_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    candidates = [
+        "C:/Windows/Fonts/impact.ttf",
+        "C:/Windows/Fonts/arialbd.ttf",
+        "C:/Windows/Fonts/segoeuib.ttf",
+    ]
+    for path in candidates:
+        try:
+            return ImageFont.truetype(path, size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
 
 
 def _font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
