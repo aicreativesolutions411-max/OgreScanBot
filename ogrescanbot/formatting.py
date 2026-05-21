@@ -44,7 +44,7 @@ def format_scan(token: TokenScan, call: CallRecord | None, is_new_call: bool, ru
         status = "New call" if is_new_call else "Already called"
         call_line = (
             f"\n\n<b>Caller</b>\n"
-            f"├ {html.escape(status)} by <b>{html.escape(call.caller_name)}</b>\n"
+            f"├ {html.escape(status)} by {caller_profile_link(call)}\n"
             f"├ Called at <b>{money(call.initial_cap)}</b>\n"
             f"└ ATH from call <b>{call.peak_multiple:.2f}x</b> ({multiple_pct(call.peak_multiple)}) | "
             f"Current <b>{current_multiple(call):.2f}x</b> ({multiple_pct(current_multiple(call))})"
@@ -69,7 +69,7 @@ def format_scan(token: TokenScan, call: CallRecord | None, is_new_call: bool, ru
         f"├ Vol     <b>{money(token.volume_h24)}</b>\n"
         f"├ LP      <b>{money(token.liquidity_usd)}</b>\n"
         f"├ 1H      <b>{pct(token.price_change_h1)}</b> 🟢 {token.buys_h1 or 0} 🔴 {token.sells_h1 or 0}\n"
-        f"└ ATH     <b>{ath_value(call, token)}</b>\n\n"
+        f"└ ATH     <b>{token_ath_value(token, call)}</b>\n\n"
         f"🔗 <b>Socials</b>\n"
         f"└ {socials}\n\n"
         f"🔎 <b>X Posts</b>\n"
@@ -89,13 +89,13 @@ def format_scan_caption(
     rug: RugSummary | None = None,
 ) -> str:
     status = "New call" if is_new_call else "Already called"
-    caller = html.escape(call.caller_name) if call else "unknown"
+    caller = caller_profile_link(call) if call else "unknown"
     called_at = money(call.initial_cap) if call else "n/a"
     now = money(call.last_cap) if call else money(token.cap_for_tracking)
     best = f"{call.peak_multiple:.2f}x" if call else "n/a"
     current_value = current_multiple(call)
     current = f"{current_value:.2f}x" if current_value is not None else "n/a"
-    ath = ath_value(call, token)
+    ath = token_ath_value(token, call)
     stats = [
         "📊 <b>Token Stats</b>",
         f"├ MC:   <b>{money(token.market_cap or token.fdv)}</b>",
@@ -103,6 +103,7 @@ def format_scan_caption(
         f"├ USD:  <b>{price(token.price_usd)}</b> ({pct(token.price_change_h24)})",
         f"├ LIQ:  <b>{money(token.liquidity_usd)}</b>",
         f"├ VOL:  <b>{money(token.volume_h24)}</b> (24h)",
+        f"├ SUP:  <b>{supply_value(token)}</b>",
         f"├ 1H:   <b>B {token.buys_h1 or 0} / S {token.sells_h1 or 0}</b> ({pct(token.price_change_h1)})",
     ]
     stats.extend(
@@ -123,7 +124,7 @@ def format_scan_caption(
         f"🛡 <b>Audit</b> <b>{audit_badge(rug)}</b>\n"
         f"{audit_status(token, rug)}\n\n"
         f"🧌 <b>Call</b>\n"
-        f"├ {html.escape(status)} by <b>{caller}</b>\n"
+        f"├ {html.escape(status)} by {caller}\n"
         f"├ Called <b>{called_at}</b> | Now <b>{now}</b>\n"
         f"└ ATH from call <b>{best}</b> ({multiple_pct(call.peak_multiple if call else None)}) | "
         f"Current <b>{current}</b> ({multiple_pct(current_value)})\n\n"
@@ -263,18 +264,53 @@ def pct(value: float | None) -> str:
     return f"{value:+.1f}%"
 
 
-def ath_value(call: CallRecord | None, token: TokenScan | None = None) -> str:
-    if not call:
-        if token and token.cap_for_tracking:
-            return f"{money(token.cap_for_tracking)} (current)"
+def supply_value(token: TokenScan) -> str:
+    if not token.price_usd or token.price_usd <= 0 or not token.cap_for_tracking:
         return "n/a"
-    return f"{money(call.peak_cap)} ({call.peak_multiple:.2f}x from call)"
+    return compact_number(token.cap_for_tracking / token.price_usd)
+
+
+def compact_number(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    if value >= 1_000_000_000:
+        return f"{value / 1_000_000_000:.1f}B"
+    if value >= 1_000_000:
+        return f"{value / 1_000_000:.1f}M"
+    if value >= 1_000:
+        return f"{value / 1_000:.1f}K"
+    return f"{value:.0f}"
+
+
+def token_ath_value(token: TokenScan, call: CallRecord | None = None) -> str:
+    if token.ath_market_cap:
+        current_cap = token.cap_for_tracking
+        pct_text = ""
+        if current_cap and token.ath_market_cap > 0:
+            pct_text = f"{((current_cap / token.ath_market_cap) - 1.0) * 100:+.0f}%"
+        age_text = age_from_seconds(int(time.time()) - token.ath_timestamp) if token.ath_timestamp else ""
+        detail = " / ".join(part for part in [pct_text, age_text] if part)
+        return f"{money(token.ath_market_cap)} ({detail})" if detail else money(token.ath_market_cap)
+    if call:
+        return f"{money(call.peak_cap)} ({call.peak_multiple:.2f}x from call)"
+    if token.cap_for_tracking:
+        return f"{money(token.cap_for_tracking)} (current)"
+    return "n/a"
 
 
 def current_multiple(call: CallRecord | None) -> float | None:
     if not call or call.initial_cap <= 0:
         return None
     return max(0.0, call.last_cap / call.initial_cap)
+
+
+def caller_profile_link(call: CallRecord | None) -> str:
+    if not call:
+        return "unknown"
+    name = html.escape(call.caller_name)
+    if call.caller_user_id and call.caller_user_id > 0:
+        return f"<a href=\"tg://user?id={call.caller_user_id}\">{name}</a>"
+    return name
 
 
 def multiple_pct(value: float | None) -> str:
@@ -301,9 +337,9 @@ def security_status(token: TokenScan, rug: RugSummary | None) -> str:
 
 def audit_status(token: TokenScan, rug: RugSummary | None) -> str:
     return (
-        f"├ 🧾 DEX <b>{dex_paid_bracket(token.dex_paid)}</b>\n"
-        f"├ 👥 Top Holders <b>[{rug_top_holder(rug)}]</b>\n"
-        f"├ 🧑‍💻 Dev Sold <b>{dev_sold_bracket(rug.dev_sold if rug else None)}</b>\n"
+        f"├ 🧾 DEX {dex_paid_link(token)}\n"
+        f"├ 👥 Top 10 <b>[{rug_top_10_holders(rug)}]</b>\n"
+        f"├ 🧑‍💻 Dev Sold {dev_sold_link(rug)}\n"
         f"└ 🔐 Mint <b>{authority_bracket(rug.mint_authority if rug else None, rug is not None)}</b> • "
         f"Freeze <b>{authority_bracket(rug.freeze_authority if rug else None, rug is not None)}</b>"
     )
@@ -325,12 +361,26 @@ def dex_paid_bracket(value: bool | None) -> str:
     return "[n/a]"
 
 
+def dex_paid_link(token: TokenScan) -> str:
+    label = dex_paid_bracket(token.dex_paid)
+    url = html.escape(token.pair_url or f"https://dexscreener.com/solana/{token.address}")
+    return f"<a href=\"{url}\">{label}</a>"
+
+
 def dev_sold_bracket(value: bool | None) -> str:
     if value is True:
         return "[YES]"
     if value is False:
         return "[NO]"
     return "[n/a]"
+
+
+def dev_sold_link(rug: RugSummary | None) -> str:
+    label = dev_sold_bracket(rug.dev_sold if rug else None)
+    wallet = rug.dev_wallet if rug else None
+    if not wallet:
+        return label
+    return f"<a href=\"https://solscan.io/account/{html.escape(wallet)}\">{label}</a>"
 
 
 def authority_bracket(value: str | None, available: bool) -> str:
@@ -378,12 +428,33 @@ def rug_top_holder(rug: RugSummary | None) -> str:
     return f"{rug.top_holder_pct:.1f}%"
 
 
+def rug_top_10_holders(rug: RugSummary | None) -> str:
+    if not rug:
+        return "n/a"
+    pct_value = rug.top_10_holder_pct if rug.top_10_holder_pct is not None else rug.top_holder_pct
+    pct = f"{pct_value:.1f}%" if pct_value is not None else "n/a"
+    if rug.holder_count is not None:
+        return f"{pct} | {rug.holder_count} total"
+    return pct
+
+
 def age_from_ms(created_at_ms: int | None) -> str:
     if not created_at_ms:
         return "age n/a"
     seconds = max(0, int(time.time() - (created_at_ms / 1000)))
     if seconds < 3600:
         return f"{seconds // 60}m"
+    if seconds < 86400:
+        return f"{seconds // 3600}h"
+    return f"{seconds // 86400}d"
+
+
+def age_from_seconds(seconds: int | None) -> str:
+    if seconds is None:
+        return ""
+    seconds = max(0, int(seconds))
+    if seconds < 3600:
+        return f"{max(1, seconds // 60)}m"
     if seconds < 86400:
         return f"{seconds // 3600}h"
     return f"{seconds // 86400}d"

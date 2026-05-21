@@ -19,6 +19,7 @@ Solana-first Telegram scanner bot using free/public data sources.
 - Uses Dexscreener pair fallbacks plus Pump.fun cap metadata when Dex does not return market cap/FDV on the selected pair.
 - Shows DEX paid status and RugCheck dev-sold status when free endpoints return it.
 - Scan captions use compact icon sections for token stats, socials, audit, calls, X links, and trading tools.
+- Auto-scan only reads the new message text/caption, so replying to an old CA does not trigger a scan unless the reply itself includes a `$ticker` or CA.
 - Adds quick links for BubbleMaps, RugCheck, Pump.fun, GMGN, DEX, and X searches for high-engagement recent posts.
 - Auto-embeds X/Twitter post links and credits the Telegram user who shared the link.
 
@@ -28,6 +29,7 @@ Solana-first Telegram scanner bot using free/public data sources.
 - Dexscreener public API
 - Optional RugCheck public report endpoint
 - Optional Pump.fun public metadata endpoint
+- Optional GeckoTerminal public OHLCV endpoint for token ATH estimates
 - Local SQLite database
 - Optional external Postgres database through `DATABASE_URL` for Render deploys that must remember calls across updates
 - Optional Telegram backup channel for SQLite persistence without Postgres
@@ -36,6 +38,7 @@ Dexscreener API reference: https://docs.dexscreener.com/api/reference
 Dexscreener DEX paid check: https://api.dexscreener.com/orders/v1/solana/{mint}
 RugCheck token report pattern: https://api.rugcheck.xyz/v1/tokens/{mint}/report
 Pump.fun metadata pattern: https://frontend-api-v3.pump.fun/coins/{mint}
+GeckoTerminal OHLCV pattern: https://api.geckoterminal.com/api/v2/networks/solana/pools/{pool}/ohlcv/hour
 
 ## Setup
 

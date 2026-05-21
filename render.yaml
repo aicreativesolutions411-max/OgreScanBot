@@ -22,6 +22,8 @@ services:
         value: true
       - key: ENABLE_PUMP_METADATA
         value: true
+      - key: ENABLE_GECKOTERMINAL_ATH
+        value: true
       - key: CALL_UPDATE_INTERVAL_SECONDS
         value: 180
       - key: CALL_UPDATE_LIMIT

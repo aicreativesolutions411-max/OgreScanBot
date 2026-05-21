@@ -34,6 +34,9 @@ class TokenScan:
     bonding_progress_pct: float | None = None
     is_pump_complete: bool | None = None
     dex_paid: bool | None = None
+    ath_price_usd: float | None = None
+    ath_market_cap: float | None = None
+    ath_timestamp: int | None = None
 
     @property
     def cap_for_tracking(self) -> float | None:
@@ -81,9 +84,12 @@ class RugSummary:
     score: float | None
     risk_count: int | None
     top_holder_pct: float | None
+    top_10_holder_pct: float | None
+    holder_count: int | None
     mint_authority: str | None
     freeze_authority: str | None
     dev_sold: bool | None
+    dev_wallet: str | None
     raw: dict[str, Any]
 
 

@@ -17,6 +17,7 @@ class Settings:
     min_multiple_for_hit: float
     enable_rugcheck: bool
     enable_pump_metadata: bool
+    enable_geckoterminal_ath: bool
     run_mode: str
     webhook_url: str
     webhook_path: str
@@ -56,6 +57,8 @@ def load_settings() -> Settings:
         min_multiple_for_hit=float(os.getenv("MIN_MULTIPLE_FOR_HIT", "2.0")),
         enable_rugcheck=os.getenv("ENABLE_RUGCHECK", "true").lower() in {"1", "true", "yes", "on"},
         enable_pump_metadata=os.getenv("ENABLE_PUMP_METADATA", "true").lower() in {"1", "true", "yes", "on"},
+        enable_geckoterminal_ath=os.getenv("ENABLE_GECKOTERMINAL_ATH", "true").lower()
+        in {"1", "true", "yes", "on"},
         run_mode=os.getenv("RUN_MODE", "polling").strip().lower() or "polling",
         webhook_url=webhook_url,
         webhook_path=webhook_path,

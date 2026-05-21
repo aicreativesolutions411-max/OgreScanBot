@@ -31,6 +31,7 @@ from .formatting import (
     powered_by_footer,
     user_display_name,
 )
+from .geckoterminal import GeckoTerminalClient
 from .images import build_pnl_card, build_scan_banner
 from .pumpfun import PumpFunClient
 from .rugcheck import RugCheckClient
@@ -46,6 +47,7 @@ class OgreScanApp:
         self.dp = Dispatcher()
         self.db = Database(settings.database_path)
         self.dex = DexscreenerClient()
+        self.gecko = GeckoTerminalClient() if settings.enable_geckoterminal_ath else None
         self.rug = RugCheckClient() if settings.enable_rugcheck else None
         self.pump = PumpFunClient() if settings.enable_pump_metadata else None
         self.last_backup_at = 0.0
@@ -69,6 +71,8 @@ class OgreScanApp:
             await self.stop_call_tracker_loop()
             await self.stop_auto_backup_loop()
             await self.dex.close()
+            if self.gecko:
+                await self.gecko.close()
             if self.rug:
                 await self.rug.close()
             if self.pump:
@@ -123,6 +127,8 @@ class OgreScanApp:
         await self.stop_call_tracker_loop()
         await self.stop_auto_backup_loop()
         await self.dex.close()
+        if self.gecko:
+            await self.gecko.close()
         if self.rug:
             await self.rug.close()
         if self.pump:
@@ -147,7 +153,7 @@ class OgreScanApp:
         await message.reply(format_help(self.settings.bot_name), disable_web_page_preview=True)
 
     async def scan_command(self, message: Message) -> None:
-        query = first_token_query_from_message(message)
+        query = first_token_query_from_message(message, include_reply=True)
         if not query:
             await message.reply("Send /scan followed by a Solana contract address, supported token link, or $ticker.")
             return
@@ -158,7 +164,7 @@ class OgreScanApp:
         if text.startswith("/"):
             return
         await self.maybe_embed_x_posts(message)
-        query = first_token_query_from_message(message)
+        query = first_token_query_from_message(message, include_reply=False)
         if query:
             await self.scan_and_reply(message, query)
 
@@ -174,7 +180,7 @@ class OgreScanApp:
                 logging.exception("Failed to embed X post: %s", embed_url)
 
     async def pnl_command(self, message: Message) -> None:
-        query = first_token_query_from_message(message)
+        query = first_token_query_from_message(message, include_reply=True)
         command = command_name(message.text or "")
         title = "FLEX" if command == "flex" else "PNL"
         if not query:
@@ -345,19 +351,28 @@ class OgreScanApp:
             return None
         return normalize_image_bytes(data)
 
-    async def resolve_token(self, query: str, include_paid: bool = True):
+    async def resolve_token(self, query: str, include_paid: bool = True, include_ath: bool = True):
         query = self.resolve_ticker_alias(query)
         token = await self.dex.scan_solana_token(query)
         if token and self.pump:
             token = token.with_pump_metadata(await self.pump.metadata(token.address))
         if token:
+            if include_ath:
+                token = await self.enrich_market_data(token)
             return await self.enrich_dex_paid(token) if include_paid else token
         if self.pump and is_solana_address(query):
             pump_token = await self.pump.scan_token(query)
             if not pump_token:
                 return None
+            if include_ath:
+                pump_token = await self.enrich_market_data(pump_token)
             return await self.enrich_dex_paid(pump_token) if include_paid else pump_token
         return None
+
+    async def enrich_market_data(self, token):
+        if self.gecko:
+            token = await self.gecko.enrich_ath(token)
+        return token
 
     async def enrich_dex_paid(self, token):
         paid = await self.dex.token_orders_paid(token.chain_id or "solana", token.address)
@@ -422,7 +437,7 @@ class OgreScanApp:
         changed = 0
         for record in calls:
             try:
-                token = await self.resolve_token(record.token_address, include_paid=False)
+                token = await self.resolve_token(record.token_address, include_paid=False, include_ath=False)
                 if not token or not token.cap_for_tracking:
                     continue
                 updated, _ = await self.db.upsert_call(
@@ -657,10 +672,10 @@ def is_plain_card_command(text: str) -> bool:
     return command_name(stripped) in {"pnl", "flex"}
 
 
-def first_token_query_from_message(message: Message) -> str | None:
+def first_token_query_from_message(message: Message, include_reply: bool = False) -> str | None:
     sources = [message.text, message.caption]
     reply = getattr(message, "reply_to_message", None)
-    if reply:
+    if include_reply and reply:
         sources.extend([reply.text, reply.caption])
 
     for source in sources:
