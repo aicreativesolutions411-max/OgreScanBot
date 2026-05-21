@@ -13,8 +13,11 @@ if TYPE_CHECKING:
 
 
 ASSET_DIR = Path(__file__).resolve().parent.parent / "assets"
+FONT_DIR = ASSET_DIR / "fonts"
 PNL_BACKGROUND = ASSET_DIR / "pnl_background_ogre.jpg"
 SCAN_FALLBACK = ASSET_DIR / "scan_fallback_ogre.jpg"
+BUNDLED_BOLD_FONT = FONT_DIR / "LiberationSans-Bold.ttf"
+BUNDLED_REGULAR_FONT = FONT_DIR / "LiberationSans-Regular.ttf"
 
 
 def build_pnl_card(token: TokenScan, call: CallRecord, title: str = "PNL") -> BytesIO:
@@ -31,12 +34,12 @@ def build_pnl_card(token: TokenScan, call: CallRecord, title: str = "PNL") -> By
 
     font_result = _fit_headline_font(headline, max_width=560, start_size=224)
     font_percent = _font(88, bold=True)
-    font_brand = _font(118, bold=True)
+    font_brand = _font(112, bold=True)
     font_label = _font(48, bold=True)
     font_mid = _font(62, bold=True)
-    font_small = _font(54, bold=True)
+    font_small = _font(52, bold=True)
     font_tiny = _font(40, bold=True)
-    font_detail = _font(34, bold=True)
+    font_detail = _font(33, bold=True)
     font_footer = _font(22, bold=True)
 
     overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
@@ -50,8 +53,9 @@ def build_pnl_card(token: TokenScan, call: CallRecord, title: str = "PNL") -> By
     _shadow_text(draw, (72, 152), _shorten(f"{token.name} (${token.symbol})", 24), font=font_mid, fill="#ffffff")
     _shadow_text(draw, (width // 2, 40), _shorten(token.name, 16), font=font_tiny, fill=accent_soft, anchor="mm")
 
-    _shadow_text(draw, (width - 72, 104), "OGRE", font=font_brand, fill="#ffffff", anchor="ra")
-    _shadow_text(draw, (width - 78, 202), f"called at {money(call.initial_cap)}", font=font_mid, fill="#f4fff6", anchor="ra")
+    _shadow_text(draw, (width - 74, 56), "@OgreScanBot", fill="#f4fff6", font=font_footer, anchor="ra")
+    _shadow_text(draw, (width - 72, 96), "OGRE", font=font_brand, fill="#ffffff", anchor="ra")
+    _shadow_text(draw, (width - 78, 218), f"called at {money(call.initial_cap)}", font=font_mid, fill="#f4fff6", anchor="ra")
 
     _spray_text(
         image,
@@ -64,15 +68,14 @@ def build_pnl_card(token: TokenScan, call: CallRecord, title: str = "PNL") -> By
     )
     draw = ImageDraw.Draw(image, "RGBA")
     _shadow_text(draw, (960, 528), str(metrics["percent"]), font=font_percent, fill=accent_soft, anchor="mm")
-    _shadow_text(draw, (960, 590), f"by {_shorten(call.caller_name, 14).upper()}", font=font_small, fill="#ffffff", anchor="mm")
-    _shadow_text(draw, (960, 628), str(metrics["caption"]), font=font_tiny, fill="#f4fff6", anchor="mm")
+    _shadow_text(draw, (960, 586), f"by {_shorten(call.caller_name, 14).upper()}", font=font_small, fill="#ffffff", anchor="mm")
+    _shadow_text(draw, (960, 642), str(metrics["caption"]), font=font_tiny, fill="#f4fff6", anchor="mm")
 
     detail = f"ATH {money(call.peak_cap)}  |  now {money(call.last_cap)}  |  {metrics['current_x']}"
-    _shadow_text(draw, (960, 676), detail, font=font_detail, fill=accent_soft, anchor="mm")
+    _shadow_text(draw, (960, 690), detail, font=font_detail, fill=accent_soft, anchor="mm")
 
     short_ca = f"{token.address[:6]}...{token.address[-6:]}"
     footer_y = height - 10
-    _shadow_text(draw, (width - 74, footer_y), "@OgreScanBot", fill="#f4fff6", font=font_footer, anchor="rb")
     _shadow_text(draw, (74, footer_y), short_ca, fill="#c4d8c7", font=font_footer, anchor="lb")
 
     output = BytesIO()
@@ -338,7 +341,13 @@ def _hex_rgba(color: str, alpha: int) -> tuple[int, int, int, int]:
 
 def _headline_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     candidates = [
+        str(BUNDLED_BOLD_FONT),
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
         "C:/Windows/Fonts/impact.ttf",
+        "C:/Windows/Fonts/ariblk.ttf",
         "C:/Windows/Fonts/arialbd.ttf",
         "C:/Windows/Fonts/segoeuib.ttf",
     ]
@@ -367,6 +376,10 @@ def _fit_headline_font(
 
 def _font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     candidates = [
+        str(BUNDLED_BOLD_FONT if bold else BUNDLED_REGULAR_FONT),
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
         "C:/Windows/Fonts/arialbd.ttf" if bold else "C:/Windows/Fonts/arial.ttf",
         "C:/Windows/Fonts/segoeuib.ttf" if bold else "C:/Windows/Fonts/segoeui.ttf",
     ]
