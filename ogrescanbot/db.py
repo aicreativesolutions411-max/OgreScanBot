@@ -519,13 +519,27 @@ class Database:
 
 def period_to_since(period: str | None) -> tuple[str, int | None]:
     normalized = (period or "all").strip().lower()
+    aliases = {
+        "1day": "1d",
+        "day": "1d",
+        "1week": "1w",
+        "week": "1w",
+        "2week": "2w",
+        "2weeks": "2w",
+        "14d": "2w",
+        "1month": "1m",
+        "month": "1m",
+        "30d": "1m",
+        "1mo": "1m",
+    }
+    normalized = aliases.get(normalized, normalized)
     now = int(time.time())
     mapping = {
         "1d": 86400,
         "24h": 86400,
         "1w": 86400 * 7,
         "7d": 86400 * 7,
-        "30d": 86400 * 30,
+        "2w": 86400 * 14,
         "1m": 86400 * 30,
         "all": 0,
     }

@@ -29,14 +29,15 @@ def build_pnl_card(token: TokenScan, call: CallRecord, title: str = "PNL") -> By
     glow_dark = "#004b12" if metrics["positive"] else "#4b0000"
     glow_mid = "#0b9f2d" if metrics["positive"] else "#b31818"
 
-    font_result = _headline_font(188 if len(headline) <= 6 else 162)
-    font_percent = _font(72, bold=True)
-    font_brand = _font(104, bold=True)
-    font_label = _font(38, bold=True)
-    font_mid = _font(56, bold=True)
-    font_small = _font(42, bold=True)
-    font_tiny = _font(32, bold=True)
-    font_footer = _font(28, bold=True)
+    font_result = _fit_headline_font(headline, max_width=560, start_size=224)
+    font_percent = _font(88, bold=True)
+    font_brand = _font(118, bold=True)
+    font_label = _font(48, bold=True)
+    font_mid = _font(62, bold=True)
+    font_small = _font(54, bold=True)
+    font_tiny = _font(40, bold=True)
+    font_detail = _font(34, bold=True)
+    font_footer = _font(22, bold=True)
 
     overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
     overlay_draw = ImageDraw.Draw(overlay, "RGBA")
@@ -45,16 +46,16 @@ def build_pnl_card(token: TokenScan, call: CallRecord, title: str = "PNL") -> By
     image = Image.alpha_composite(image, overlay)
     draw = ImageDraw.Draw(image, "RGBA")
 
-    _shadow_text(draw, (78, 92), title.upper(), font=font_label, fill=accent)
-    _shadow_text(draw, (78, 154), _shorten(f"{token.name} (${token.symbol})", 24), font=font_mid, fill="#ffffff")
+    _shadow_text(draw, (72, 82), title.upper(), font=font_label, fill=accent)
+    _shadow_text(draw, (72, 152), _shorten(f"{token.name} (${token.symbol})", 24), font=font_mid, fill="#ffffff")
     _shadow_text(draw, (width // 2, 40), _shorten(token.name, 16), font=font_tiny, fill=accent_soft, anchor="mm")
 
-    _shadow_text(draw, (width - 78, 132), "OGRE", font=font_brand, fill="#ffffff", anchor="ra")
-    _shadow_text(draw, (width - 82, 222), f"called at {money(call.initial_cap)}", font=font_mid, fill="#f4fff6", anchor="ra")
+    _shadow_text(draw, (width - 72, 104), "OGRE", font=font_brand, fill="#ffffff", anchor="ra")
+    _shadow_text(draw, (width - 78, 202), f"called at {money(call.initial_cap)}", font=font_mid, fill="#f4fff6", anchor="ra")
 
     _spray_text(
         image,
-        (960, 365),
+        (960, 384),
         headline,
         font_result,
         fill=accent,
@@ -62,17 +63,17 @@ def build_pnl_card(token: TokenScan, call: CallRecord, title: str = "PNL") -> By
         glow_mid=glow_mid,
     )
     draw = ImageDraw.Draw(image, "RGBA")
-    _shadow_text(draw, (960, 500), str(metrics["percent"]), font=font_percent, fill=accent_soft, anchor="mm")
-    _shadow_text(draw, (960, 565), f"by {_shorten(call.caller_name, 16).upper()}", font=font_small, fill="#ffffff", anchor="mm")
-    _shadow_text(draw, (960, 616), str(metrics["caption"]), font=font_tiny, fill="#f4fff6", anchor="mm")
+    _shadow_text(draw, (960, 528), str(metrics["percent"]), font=font_percent, fill=accent_soft, anchor="mm")
+    _shadow_text(draw, (960, 590), f"by {_shorten(call.caller_name, 14).upper()}", font=font_small, fill="#ffffff", anchor="mm")
+    _shadow_text(draw, (960, 628), str(metrics["caption"]), font=font_tiny, fill="#f4fff6", anchor="mm")
 
     detail = f"ATH {money(call.peak_cap)}  |  now {money(call.last_cap)}  |  {metrics['current_x']}"
-    _shadow_text(draw, (960, 658), detail, font=font_tiny, fill=accent_soft, anchor="mm")
+    _shadow_text(draw, (960, 676), detail, font=font_detail, fill=accent_soft, anchor="mm")
 
     short_ca = f"{token.address[:6]}...{token.address[-6:]}"
-    footer_y = height - 46
-    _shadow_text(draw, (width - 74, footer_y), "@OgreScanBot", fill="#f4fff6", font=font_footer, anchor="ra")
-    _shadow_text(draw, (74, footer_y), short_ca, fill="#c4d8c7", font=font_footer)
+    footer_y = height - 10
+    _shadow_text(draw, (width - 74, footer_y), "@OgreScanBot", fill="#f4fff6", font=font_footer, anchor="rb")
+    _shadow_text(draw, (74, footer_y), short_ca, fill="#c4d8c7", font=font_footer, anchor="lb")
 
     output = BytesIO()
     image.convert("RGB").save(output, format="PNG")
@@ -347,6 +348,21 @@ def _headline_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
         except OSError:
             continue
     return ImageFont.load_default()
+
+
+def _fit_headline_font(
+    text: str,
+    max_width: int,
+    start_size: int = 232,
+    min_size: int = 150,
+) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    measuring = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    for size in range(start_size, min_size - 1, -6):
+        font = _headline_font(size)
+        left, _top, right, _bottom = measuring.textbbox((0, 0), text, font=font, stroke_width=10)
+        if right - left <= max_width:
+            return font
+    return _headline_font(min_size)
 
 
 def _font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:

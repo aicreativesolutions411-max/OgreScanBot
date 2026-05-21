@@ -219,8 +219,8 @@ def format_help(bot_name: str) -> str:
         "|- /scan &lt;ca, link, or $ticker&gt;\n"
         "|- /pnl &lt;ca or $ticker&gt;\n"
         "|- /flex &lt;ca or $ticker&gt;\n"
-        "|- /leaderboard 1w\n"
-        "|- /lb 1d | /lb 1w | /lb 30d | /lb all\n"
+        "|- /leaderboard\n"
+        "|- /lb 1d | /lb 1w | /lb 2w | /lb 1m\n"
         "|- /backup"
         f"{powered_by_footer()}"
     )

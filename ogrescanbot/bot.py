@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
+import html
 import logging
 from io import BytesIO
 from pathlib import Path
@@ -10,7 +11,7 @@ import time
 from aiogram import Bot, Dispatcher, F
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
-from aiogram.types import BufferedInputFile, ChatMemberUpdated, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, ChatMemberUpdated, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram.client.default import DefaultBotProperties
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import ClientError, web
@@ -118,7 +119,9 @@ class OgreScanApp:
         self.dp.message.register(self.set_backup_channel_command, lambda message: is_backup_command(message.text or ""))
         self.dp.message.register(self.scan_command, Command("scan"))
         self.dp.message.register(self.pnl_command, Command("pnl", "flex"))
+        self.dp.message.register(self.pnl_command, lambda message: is_plain_card_command(message.text or ""))
         self.dp.message.register(self.leaderboard_command, Command("lb", "leaderboard"))
+        self.dp.callback_query.register(self.leaderboard_period_callback, F.data.startswith("lb:"))
         self.dp.message.register(self.backup_command, Command("backup"))
         self.dp.message.register(self.auto_scan_message, F.text)
         self.dp.channel_post.register(self.channel_post_text_handler, F.text)
@@ -156,8 +159,8 @@ class OgreScanApp:
 
     async def pnl_command(self, message: Message) -> None:
         query = first_token_query_from_message(message)
-        command = (message.text or "").split(maxsplit=1)[0].lower()
-        title = "FLEX" if command.startswith("/flex") else "PNL"
+        command = command_name(message.text or "")
+        title = "FLEX" if command == "flex" else "PNL"
         if not query:
             await message.reply(f"Send /{title.lower()} followed by a Solana contract address or $ticker.")
             return
@@ -172,18 +175,24 @@ class OgreScanApp:
             await message.reply("I need a Telegram user to attach this card to.")
             return
 
-        call, _ = await self.db.upsert_call(message.chat.id, token, user.id, user_display_name(user))
+        try:
+            call, _ = await self.db.upsert_call(message.chat.id, token, user.id, user_display_name(user))
+        except ValueError:
+            await message.reply("That token is missing market cap/FDV data, so I cannot build a tracked PNL/FLEX card yet.")
+            return
         await self.maybe_backup_database()
         current_x = call.last_cap / call.initial_cap if call.initial_cap else call.peak_multiple
         result_line = pnl_result_line(call, current_x)
         card = build_pnl_card(token, call, title=title)
         photo = BufferedInputFile(card.getvalue(), filename=card.name)
+        token_title = html.escape(f"{token.name} (${token.symbol})")
+        player = html.escape(user_display_name(user))
         await message.reply_photo(
             photo,
             caption=(
                 f"🧌 <b>{title} CARD</b>\n"
-                f"<b>{token.name} (${token.symbol})</b>\n"
-                f"Player <b>{user_display_name(user)}</b>\n"
+                f"<b>{token_title}</b>\n"
+                f"Player <b>{player}</b>\n"
                 f"Called <b>{plain_money(call.initial_cap)}</b> | ATH <b>{plain_money(call.peak_cap)}</b>\n"
                 f"{result_line}"
                 f"{powered_by_footer()}"
@@ -192,16 +201,37 @@ class OgreScanApp:
 
     async def leaderboard_command(self, message: Message) -> None:
         args = command_args(message)
-        period, since_ts = period_to_since(args[0] if args else "1w")
+        period, text, markup = await self.build_leaderboard_message(message.chat.id, args[0] if args else "1d")
+        await message.reply(text, reply_markup=markup, disable_web_page_preview=True)
+
+    async def leaderboard_period_callback(self, callback: CallbackQuery) -> None:
+        if not callback.message or not callback.data:
+            await callback.answer()
+            return
+        requested = callback.data.split(":", 1)[1]
+        _period, text, markup = await self.build_leaderboard_message(callback.message.chat.id, requested)
+        try:
+            await callback.message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
+            await callback.answer()
+        except Exception:
+            logging.exception("Leaderboard period update failed.")
+            await callback.answer("Could not update leaderboard right now.", show_alert=False)
+
+    async def build_leaderboard_message(
+        self,
+        chat_id: int,
+        requested_period: str,
+    ) -> tuple[str, str, InlineKeyboardMarkup]:
+        period, since_ts = period_to_since(requested_period)
         traders = await self.db.top_traders(
-            message.chat.id,
+            chat_id,
             since_ts=since_ts,
             min_hit_multiple=self.settings.min_multiple_for_hit,
             limit=5,
         )
-        calls = await self.db.leaderboard(message.chat.id, since_ts=since_ts, limit=10)
-        stats = await self.db.stats(message.chat.id, since_ts, self.settings.min_multiple_for_hit)
-        await message.reply(format_leaderboard(period, traders, calls, stats), disable_web_page_preview=True)
+        calls = await self.db.leaderboard(chat_id, since_ts=since_ts, limit=10)
+        stats = await self.db.stats(chat_id, since_ts, self.settings.min_multiple_for_hit)
+        return period, format_leaderboard(period, traders, calls, stats), leaderboard_keyboard(period)
 
     async def backup_command(self, message: Message) -> None:
         if not self.sqlite_backup_enabled():
@@ -559,9 +589,39 @@ def command_args(message: Message) -> list[str]:
     return parts[1].split()
 
 
+def command_name(text: str) -> str:
+    first = (text or "").strip().split(maxsplit=1)[0].lower()
+    first = first.removeprefix("/")
+    return first.split("@", 1)[0]
+
+
+def is_plain_card_command(text: str) -> bool:
+    stripped = (text or "").strip()
+    if not stripped or stripped.startswith("/"):
+        return False
+    return command_name(stripped) in {"pnl", "flex"}
+
+
 def first_token_query_from_message(message: Message) -> str | None:
-    queries = extract_token_queries(message.text or message.caption or "")
-    return queries[0] if queries else None
+    sources = [message.text, message.caption]
+    reply = getattr(message, "reply_to_message", None)
+    if reply:
+        sources.extend([reply.text, reply.caption])
+
+    for source in sources:
+        queries = extract_token_queries(source or "")
+        if queries:
+            return queries[0]
+    return None
+
+
+def leaderboard_keyboard(active_period: str) -> InlineKeyboardMarkup:
+    periods = [("1d", "1D"), ("1w", "1W"), ("2w", "2W"), ("1m", "1M")]
+    buttons = []
+    for key, label in periods:
+        text = f"• {label} •" if key == active_period else label
+        buttons.append(InlineKeyboardButton(text=text, callback_data=f"lb:{key}"))
+    return InlineKeyboardMarkup(inline_keyboard=[buttons])
 
 
 def is_backup_command(text: str) -> bool:
