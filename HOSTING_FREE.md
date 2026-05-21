@@ -54,12 +54,25 @@ TELEGRAM_BOT_TOKEN=your_botfather_token
 RUN_MODE=webhook
 WEBHOOK_URL=https://your-render-service.onrender.com
 WEBHOOK_PATH=/telegram/webhook
+KEEP_ALIVE_INTERVAL_SECONDS=600
 DATABASE_URL=postgresql://user:password@host/dbname?sslmode=require
 ```
 
 Do not hardcode the Render port in `bot.py`. Render provides a `PORT` environment variable automatically, and OgreScanBot already reads it through `settings.port`.
 
 Important: Render free web services should not be treated like production. They can sleep, and local SQLite files will not survive redeploys because the filesystem is ephemeral. Use `DATABASE_URL` with a free external Postgres database if you want calls, PNL, and leaderboards to persist.
+
+The bot exposes `/` and `/healthz` in webhook mode and pings `WEBHOOK_URL/healthz` every `KEEP_ALIVE_INTERVAL_SECONDS` seconds by default. With `KEEP_ALIVE_INTERVAL_SECONDS=600`, that is one ping every 10 minutes.
+
+To confirm it is active, open:
+
+```text
+https://your-render-service.onrender.com/healthz
+```
+
+You should see `"keep_alive":{"enabled":true,...}` and `"interval_seconds":600`.
+
+For the strongest free keep-alive, also point an outside uptime monitor at the same `/healthz` URL every 10 minutes. Internal pings help while the service is running; an outside monitor can wake it again if Render has already slept or restarted it.
 
 Free database options:
 

@@ -56,10 +56,13 @@ class TokenScan:
         if twitter and not _has_url(socials, twitter):
             socials.append({"type": "twitter", "url": twitter})
 
+        pump_cap = _float_or_none(pump.get("usd_market_cap")) or _float_or_none(pump.get("market_cap"))
         return replace(
             self,
             name=self.name if self.name != "Unknown" else _clean_string(pump.get("name")) or self.name,
             symbol=self.symbol if self.symbol != "?" else _clean_string(pump.get("symbol")) or self.symbol,
+            market_cap=self.market_cap or pump_cap,
+            fdv=self.fdv or pump_cap,
             image_url=self.image_url or normalize_media_url(_clean_string(pump.get("image_uri"))),
             description=self.description or _clean_string(pump.get("description")),
             socials=socials,

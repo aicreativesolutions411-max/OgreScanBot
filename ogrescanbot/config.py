@@ -28,6 +28,8 @@ class Settings:
     restore_backup_on_start: bool
     call_update_interval_seconds: int
     call_update_limit: int
+    keep_alive_url: str
+    keep_alive_interval_seconds: int
     ticker_aliases: dict[str, str]
 
 
@@ -36,6 +38,12 @@ def load_settings() -> Settings:
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is missing. Copy .env.example to .env and add your bot token.")
+
+    webhook_url = os.getenv("WEBHOOK_URL", "").strip().rstrip("/")
+    webhook_path = os.getenv("WEBHOOK_PATH", "/telegram/webhook").strip() or "/telegram/webhook"
+    keep_alive_url = os.getenv("KEEP_ALIVE_URL", "").strip().rstrip("/")
+    if not keep_alive_url and webhook_url:
+        keep_alive_url = f"{webhook_url}/healthz"
 
     return Settings(
         telegram_bot_token=token,
@@ -49,8 +57,8 @@ def load_settings() -> Settings:
         enable_rugcheck=os.getenv("ENABLE_RUGCHECK", "true").lower() in {"1", "true", "yes", "on"},
         enable_pump_metadata=os.getenv("ENABLE_PUMP_METADATA", "true").lower() in {"1", "true", "yes", "on"},
         run_mode=os.getenv("RUN_MODE", "polling").strip().lower() or "polling",
-        webhook_url=os.getenv("WEBHOOK_URL", "").strip().rstrip("/"),
-        webhook_path=os.getenv("WEBHOOK_PATH", "/telegram/webhook").strip() or "/telegram/webhook",
+        webhook_url=webhook_url,
+        webhook_path=webhook_path,
         host=os.getenv("HOST", "0.0.0.0").strip() or "0.0.0.0",
         port=int(os.getenv("PORT", "8080")),
         backup_chat_id=os.getenv("BACKUP_CHAT_ID", "").strip(),
@@ -59,6 +67,8 @@ def load_settings() -> Settings:
         restore_backup_on_start=os.getenv("RESTORE_BACKUP_ON_START", "true").lower() in {"1", "true", "yes", "on"},
         call_update_interval_seconds=int(os.getenv("CALL_UPDATE_INTERVAL_SECONDS", "180")),
         call_update_limit=int(os.getenv("CALL_UPDATE_LIMIT", "150")),
+        keep_alive_url=keep_alive_url,
+        keep_alive_interval_seconds=int(os.getenv("KEEP_ALIVE_INTERVAL_SECONDS", "600")),
         ticker_aliases=parse_ticker_aliases(os.getenv("TICKER_ALIASES", "")),
     )
 

@@ -64,12 +64,12 @@ def format_scan(token: TokenScan, call: CallRecord | None, is_new_call: bool, ru
         f"{meta_text}"
         f"📊 <b>Stats</b>\n"
         f"├ USD     <b>{price(token.price_usd)}</b> ({pct(token.price_change_h24)} 24h)\n"
-        f"├ MC      <b>{money(token.market_cap)}</b>\n"
+        f"├ MC      <b>{money(token.market_cap or token.fdv)}</b>\n"
         f"├ FDV     <b>{money(token.fdv)}</b>\n"
         f"├ Vol     <b>{money(token.volume_h24)}</b>\n"
         f"├ LP      <b>{money(token.liquidity_usd)}</b>\n"
         f"├ 1H      <b>{pct(token.price_change_h1)}</b> 🟢 {token.buys_h1 or 0} 🔴 {token.sells_h1 or 0}\n"
-        f"└ ATH     <b>{ath_value(call)}</b>\n\n"
+        f"└ ATH     <b>{ath_value(call, token)}</b>\n\n"
         f"🔗 <b>Socials</b>\n"
         f"└ {socials}\n\n"
         f"🔎 <b>X Posts</b>\n"
@@ -95,10 +95,10 @@ def format_scan_caption(
     best = f"{call.peak_multiple:.2f}x" if call else "n/a"
     current_value = current_multiple(call)
     current = f"{current_value:.2f}x" if current_value is not None else "n/a"
-    ath = ath_value(call)
+    ath = ath_value(call, token)
     stats = [
         "📊 <b>Token Stats</b>",
-        f"├ MC:   <b>{money(token.market_cap)}</b>",
+        f"├ MC:   <b>{money(token.market_cap or token.fdv)}</b>",
         f"├ ATH:  <b>{ath}</b>",
         f"├ USD:  <b>{price(token.price_usd)}</b> ({pct(token.price_change_h24)})",
         f"├ LIQ:  <b>{money(token.liquidity_usd)}</b>",
@@ -263,10 +263,12 @@ def pct(value: float | None) -> str:
     return f"{value:+.1f}%"
 
 
-def ath_value(call: CallRecord | None) -> str:
+def ath_value(call: CallRecord | None, token: TokenScan | None = None) -> str:
     if not call:
+        if token and token.cap_for_tracking:
+            return f"{money(token.cap_for_tracking)} (current)"
         return "n/a"
-    return f"{money(call.peak_cap)} ({call.peak_multiple:.2f}x)"
+    return f"{money(call.peak_cap)} ({call.peak_multiple:.2f}x from call)"
 
 
 def current_multiple(call: CallRecord | None) -> float | None:

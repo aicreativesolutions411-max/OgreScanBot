@@ -51,6 +51,7 @@ class OgreScanApp:
         self.last_backup_at = 0.0
         self.backup_task: asyncio.Task | None = None
         self.call_tracker_task: asyncio.Task | None = None
+        self.keep_alive_task: asyncio.Task | None = None
         self.learned_backup_chat_id = ""
         self._register_handlers()
 
@@ -60,9 +61,11 @@ class OgreScanApp:
         await self.load_backup_chat_id_from_db()
         self.start_auto_backup_loop()
         self.start_call_tracker_loop()
+        self.start_keep_alive_loop()
         try:
             await self.dp.start_polling(self.bot)
         finally:
+            await self.stop_keep_alive_loop()
             await self.stop_call_tracker_loop()
             await self.stop_auto_backup_loop()
             await self.dex.close()
@@ -87,7 +90,18 @@ class OgreScanApp:
         return app
 
     async def health(self, request: web.Request) -> web.Response:
-        return web.json_response({"ok": True, "bot": self.settings.bot_name})
+        return web.json_response(
+            {
+                "ok": True,
+                "bot": self.settings.bot_name,
+                "keep_alive": {
+                    "enabled": bool(self.settings.keep_alive_url and self.settings.keep_alive_interval_seconds > 0),
+                    "url": self.settings.keep_alive_url,
+                    "interval_seconds": self.settings.keep_alive_interval_seconds,
+                },
+                "database": "postgres" if self.settings.database_path.startswith(("postgres://", "postgresql://")) else "sqlite",
+            }
+        )
 
     async def _on_webhook_startup(self, app: web.Application) -> None:
         await self.restore_database_backup()
@@ -95,6 +109,7 @@ class OgreScanApp:
         await self.load_backup_chat_id_from_db()
         self.start_auto_backup_loop()
         self.start_call_tracker_loop()
+        self.start_keep_alive_loop()
         webhook_endpoint = f"{self.settings.webhook_url}{self.settings.webhook_path}"
         await self.bot.set_webhook(
             webhook_endpoint,
@@ -104,6 +119,7 @@ class OgreScanApp:
         logging.info("Webhook set to %s", webhook_endpoint)
 
     async def _on_webhook_cleanup(self, app: web.Application) -> None:
+        await self.stop_keep_alive_loop()
         await self.stop_call_tracker_loop()
         await self.stop_auto_backup_loop()
         await self.dex.close()
@@ -425,6 +441,45 @@ class OgreScanApp:
             logging.info("Live call tracker refreshed %s calls.", changed)
             await self.maybe_backup_database()
 
+    def start_keep_alive_loop(self) -> None:
+        if self.keep_alive_task or not self.settings.keep_alive_url:
+            return
+        if self.settings.keep_alive_interval_seconds <= 0:
+            return
+        logging.info(
+            "Keep-alive enabled: pinging %s every %s seconds.",
+            self.settings.keep_alive_url,
+            max(60, self.settings.keep_alive_interval_seconds),
+        )
+        self.keep_alive_task = asyncio.create_task(self.keep_alive_loop())
+
+    async def stop_keep_alive_loop(self) -> None:
+        if not self.keep_alive_task:
+            return
+        self.keep_alive_task.cancel()
+        try:
+            await self.keep_alive_task
+        except asyncio.CancelledError:
+            pass
+        self.keep_alive_task = None
+
+    async def keep_alive_loop(self) -> None:
+        await asyncio.sleep(30)
+        while True:
+            await self.ping_keep_alive()
+            await asyncio.sleep(max(60, self.settings.keep_alive_interval_seconds))
+
+    async def ping_keep_alive(self) -> None:
+        url = self.settings.keep_alive_url
+        if not url:
+            return
+        try:
+            async with self.dex._session.get(url, headers={"User-Agent": "OgreScanBot-KeepAlive/1.0"}) as response:
+                await response.read()
+                logging.info("Keep-alive ping %s -> %s", url, response.status)
+        except Exception:
+            logging.exception("Keep-alive ping failed for %s", url)
+
     def sqlite_backup_enabled(self) -> bool:
         return bool(
             self.backup_chat_id()
@@ -695,11 +750,13 @@ def safe_scan_caption(token, call) -> str:
         "",
         "Stats",
         f"USD: {token.price_usd or 'n/a'}",
-        f"MC: {plain_money(token.market_cap)}",
+        f"MC: {plain_money(token.market_cap or token.fdv)}",
         f"FDV: {plain_money(token.fdv)}",
         f"Vol: {plain_money(token.volume_h24)}",
         f"LP: {plain_money(token.liquidity_usd)}",
-        f"ATH: {plain_money(peak)} ({best:.2f}x)" if best else "ATH: n/a",
+        f"ATH: {plain_money(peak)} ({best:.2f}x from call)" if best else (
+            f"ATH: {plain_money(token.cap_for_tracking)} (current)" if token.cap_for_tracking else "ATH: n/a"
+        ),
         "",
         f"Caller: {caller}",
         f"Called at: {plain_money(cap)}",

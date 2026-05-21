@@ -9,12 +9,14 @@ Solana-first Telegram scanner bot using free/public data sources.
 - Uses exact ticker aliases before search, so `$OGRE` resolves to the official OgreCoin contract.
 - Records the first caller for each token in each chat.
 - Refreshes tracked calls from free APIs in the background so ATH/peak X keeps moving.
+- Pings its own `/healthz` endpoint when hosted with webhooks so free hosts are less likely to idle out.
 - Tracks each chat separately.
 - Builds leaderboards based on the biggest X return from a single call.
 - Leaderboards use a compact tree-and-quote layout for top callers, group stats, and best trades.
 - Generates matching call-based PNL/flex cards with `/pnl <ca>`, `/flex <ca>`, `pnl <ca>`, or `flex <ca>`.
 - PNL/flex cards use text over the image with no stat boxes, showing a big green call-to-ATH X or a big red loss.
 - Pulls token metadata images/descriptions from Dexscreener and falls back to Pump.fun public metadata when available.
+- Uses Dexscreener pair fallbacks plus Pump.fun cap metadata when Dex does not return market cap/FDV on the selected pair.
 - Shows DEX paid status and RugCheck dev-sold status when free endpoints return it.
 - Scan captions use compact icon sections for token stats, socials, audit, calls, X links, and trading tools.
 - Adds quick links for BubbleMaps, RugCheck, Pump.fun, GMGN, DEX, and X searches for high-engagement recent posts.
@@ -79,6 +81,21 @@ flex <solana_ca>
 - A hit is any call that reaches `MIN_MULTIPLE_FOR_HIT`, default `2.0x`.
 
 `CALL_UPDATE_INTERVAL_SECONDS` controls the live API refresh loop, default `180`. `CALL_UPDATE_LIMIT` controls how many older tracked calls are refreshed per loop, default `150`.
+
+`KEEP_ALIVE_INTERVAL_SECONDS` controls the self-ping loop, default `600`. When `WEBHOOK_URL` is set, the bot pings `WEBHOOK_URL/healthz` unless you set `KEEP_ALIVE_URL` yourself.
+
+For Render, make sure these environment variables are set in the Render dashboard:
+
+```text
+RUN_MODE=webhook
+WEBHOOK_URL=https://your-render-service.onrender.com
+WEBHOOK_PATH=/telegram/webhook
+KEEP_ALIVE_INTERVAL_SECONDS=600
+```
+
+Then open `https://your-render-service.onrender.com/healthz`. It should show `"keep_alive":{"enabled":true,...}` and `"interval_seconds":600`.
+
+ATH shown in scans is the highest cap the bot has tracked from that chat's call. Dexscreener's free API does not always provide lifetime token ATH, so the bot uses live refreshes to keep the call peak updated.
 
 `TICKER_ALIASES` lets you force exact ticker matches before Dexscreener search. It defaults to:
 

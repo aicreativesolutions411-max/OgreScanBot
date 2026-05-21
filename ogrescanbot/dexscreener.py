@@ -30,6 +30,8 @@ class DexscreenerClient:
         price_change = pair.get("priceChange") or {}
         volume = pair.get("volume") or {}
         liquidity = pair.get("liquidity") or {}
+        market_cap = _float_or_none(pair.get("marketCap")) or _max_float_from_pairs(pairs, "marketCap")
+        fdv = _float_or_none(pair.get("fdv")) or _max_float_from_pairs(pairs, "fdv") or market_cap
 
         return TokenScan(
             address=base.get("address") or token_address,
@@ -39,16 +41,16 @@ class DexscreenerClient:
             dex_id=pair.get("dexId") or "?",
             pair_address=pair.get("pairAddress") or "",
             pair_url=pair.get("url") or f"https://dexscreener.com/solana/{token_address}",
-            price_usd=_float_or_none(pair.get("priceUsd")),
-            market_cap=_float_or_none(pair.get("marketCap")),
-            fdv=_float_or_none(pair.get("fdv")),
-            liquidity_usd=_float_or_none(liquidity.get("usd")),
-            volume_h24=_float_or_none(volume.get("h24")),
-            price_change_h1=_float_or_none(price_change.get("h1")),
-            price_change_h24=_float_or_none(price_change.get("h24")),
+            price_usd=_float_or_none(pair.get("priceUsd")) or _first_float_from_pairs(pairs, "priceUsd"),
+            market_cap=market_cap,
+            fdv=fdv,
+            liquidity_usd=_float_or_none(liquidity.get("usd")) or _max_nested_float_from_pairs(pairs, "liquidity", "usd"),
+            volume_h24=_float_or_none(volume.get("h24")) or _max_nested_float_from_pairs(pairs, "volume", "h24"),
+            price_change_h1=_float_or_none(price_change.get("h1")) or _first_nested_float_from_pairs(pairs, "priceChange", "h1"),
+            price_change_h24=_float_or_none(price_change.get("h24")) or _first_nested_float_from_pairs(pairs, "priceChange", "h24"),
             buys_h1=_int_or_none(txns_h1.get("buys")),
             sells_h1=_int_or_none(txns_h1.get("sells")),
-            created_at_ms=_int_or_none(pair.get("pairCreatedAt")),
+            created_at_ms=_earliest_int_from_pairs(pairs, "pairCreatedAt") or _int_or_none(pair.get("pairCreatedAt")),
             image_url=normalize_media_url(_string_or_none(info.get("imageUrl"))),
             header_url=normalize_media_url(_string_or_none(info.get("header"))),
             description=_string_or_none(info.get("description")),
@@ -110,6 +112,53 @@ def _int_or_none(value: object) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _positive(value: float | None) -> bool:
+    return value is not None and value > 0
+
+
+def _first_float_from_pairs(pairs: list[dict], key: str) -> float | None:
+    for pair in pairs:
+        value = _float_or_none(pair.get(key))
+        if _positive(value):
+            return value
+    return None
+
+
+def _max_float_from_pairs(pairs: list[dict], key: str) -> float | None:
+    values = [_float_or_none(pair.get(key)) for pair in pairs]
+    values = [value for value in values if _positive(value)]
+    return max(values) if values else None
+
+
+def _first_nested_float_from_pairs(pairs: list[dict], outer_key: str, inner_key: str) -> float | None:
+    for pair in pairs:
+        nested = pair.get(outer_key) or {}
+        if not isinstance(nested, dict):
+            continue
+        value = _float_or_none(nested.get(inner_key))
+        if value is not None:
+            return value
+    return None
+
+
+def _max_nested_float_from_pairs(pairs: list[dict], outer_key: str, inner_key: str) -> float | None:
+    values = []
+    for pair in pairs:
+        nested = pair.get(outer_key) or {}
+        if not isinstance(nested, dict):
+            continue
+        value = _float_or_none(nested.get(inner_key))
+        if _positive(value):
+            values.append(value)
+    return max(values) if values else None
+
+
+def _earliest_int_from_pairs(pairs: list[dict], key: str) -> int | None:
+    values = [_int_or_none(pair.get(key)) for pair in pairs]
+    values = [value for value in values if value is not None and value > 0]
+    return min(values) if values else None
 
 
 def _string_or_none(value: object) -> str | None:
