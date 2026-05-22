@@ -14,6 +14,10 @@ from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import BufferedInputFile, CallbackQuery, ChatMemberUpdated, InlineKeyboardButton, InlineKeyboardMarkup, Message
+try:
+    from aiogram.types import CopyTextButton
+except ImportError:  # Older aiogram fallback: show the CA in an alert.
+    CopyTextButton = None
 from aiogram.client.default import DefaultBotProperties
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import ClientError, web
@@ -177,6 +181,7 @@ class OgreScanApp:
         self.dp.message.register(self.leaderboard_command, lambda message: is_plain_leaderboard_command(message.text or ""))
         self.dp.message.register(self.safe_scan_command, Command("safescan", "filters"))
         self.dp.callback_query.register(self.leaderboard_period_callback, F.data.startswith("lb:"))
+        self.dp.callback_query.register(self.copy_ca_callback, F.data.startswith("copyca:"))
         self.dp.callback_query.register(self.scan_links_callback, F.data.startswith("scanmenu:"))
         self.dp.callback_query.register(self.trader_menu_callback, F.data.startswith("trader:"))
         self.dp.message.register(self.status_command, Command("status"))
@@ -439,6 +444,13 @@ class OgreScanApp:
         except Exception:
             logging.exception("Leaderboard period update failed.")
             await callback.answer("Could not update leaderboard right now.", show_alert=False)
+
+    async def copy_ca_callback(self, callback: CallbackQuery) -> None:
+        if not callback.data:
+            await callback.answer()
+            return
+        address = callback.data.split(":", 1)[1]
+        await callback.answer(f"CA:\n{address}", show_alert=True)
 
     async def scan_links_callback(self, callback: CallbackQuery) -> None:
         if not callback.message or not callback.data:
@@ -1459,6 +1471,12 @@ def scan_links_keyboard(token, rug=None, menu: str = "main") -> InlineKeyboardMa
 
     rows.append(
         [
+            copy_ca_button(address),
+            InlineKeyboardButton(text="Dexscreener", url=token.pair_url or f"https://dexscreener.com/solana/{address}"),
+        ]
+    )
+    rows.append(
+        [
             InlineKeyboardButton(text="Explain", callback_data=scan_menu_data("exs", address)),
             InlineKeyboardButton(text="Paid Trend", callback_data=scan_menu_data("paid", address)),
             InlineKeyboardButton(text="Wallet Map", callback_data=scan_menu_data("cluster", address)),
@@ -1483,6 +1501,12 @@ def scan_links_keyboard(token, rug=None, menu: str = "main") -> InlineKeyboardMa
 
 def scan_menu_data(menu: str, address: str) -> str:
     return f"scanmenu:{menu}:{address}"
+
+
+def copy_ca_button(address: str) -> InlineKeyboardButton:
+    if CopyTextButton is not None:
+        return InlineKeyboardButton(text="Copy CA", copy_text=CopyTextButton(text=address))
+    return InlineKeyboardButton(text="Show CA", callback_data=f"copyca:{address}")
 
 
 def add_back_row(rows: list[list[InlineKeyboardButton]], address: str) -> None:

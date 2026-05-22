@@ -1099,7 +1099,7 @@ def official_x_link(token: TokenScan) -> str | None:
 def ca_click_link(token: TokenScan, full: bool = False) -> str:
     address = html.escape(token.address)
     label = address if full else short_address(token.address)
-    return f"<a href=\"https://solscan.io/token/{address}\">{label}</a>"
+    return f"<code>{label}</code>"
 
 
 def pair_click_link(token: TokenScan) -> str:

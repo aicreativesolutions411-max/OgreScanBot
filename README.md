@@ -27,6 +27,7 @@ Solana-first Telegram scanner bot using free/public data sources.
 - Adds an Explain button on every scan for a quick human-readable token risk read using free scan and RugCheck data.
 - Adds Smart Token Intelligence: explain modes, paid trend check, cautious wallet cluster read, and explain-my-loss views.
 - Scan captions use compact icon sections for token stats, socials, audit, and calls, with categorized button menus for Smart Intel, charts, X links, security, socials, and trade tools. The trade menu includes OgreTradeBot.
+- Scan posts keep the CA as copyable code text and put fast `Copy CA` plus `Dexscreener` buttons first.
 - Auto-scan only reads the new message text/caption, so replying to an old CA does not trigger a scan unless the reply itself includes a `$ticker` or CA.
 - Valid Solana CAs always post. If Dexscreener/Pump.fun have not indexed the mint yet, the bot sends a fallback scan with the CA, links, and audit buttons instead of going silent.
 - `$ticker` scans prefer Dexscreener's best exact-symbol Solana market by MC, liquidity, volume, transactions, boosts, and age. Safety signals are used to demote obvious duplicate junk, not to hide valid low-MC/new pairs.
