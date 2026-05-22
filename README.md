@@ -28,8 +28,9 @@ Solana-first Telegram scanner bot using free/public data sources.
 - Adds Smart Token Intelligence: explain modes, paid trend check, cautious wallet cluster read, and explain-my-loss views.
 - Scan captions use compact icon sections for token stats, socials, audit, and calls, with categorized button menus for Smart Intel, charts, X links, security, socials, and trade tools. The trade menu includes OgreTradeBot.
 - Auto-scan only reads the new message text/caption, so replying to an old CA does not trigger a scan unless the reply itself includes a `$ticker` or CA.
+- Valid Solana CAs always post. If Dexscreener/Pump.fun have not indexed the mint yet, the bot sends a fallback scan with the CA, links, and audit buttons instead of going silent.
 - Adds quick links for BubbleMaps, RugCheck, Pump.fun, GMGN, DEX, and X searches for high-engagement recent posts.
-- Adds SafeScan filtering with `/safescan on` for manual `/scan` checks. Auto CA/$ticker posts still show the best match instead of going silent; risks stay visible in the scan/audit.
+- Adds SafeScan ranking/warnings with `/safescan on`. Found CA/$ticker scans still post, including low-MC Pump coins; SafeScan only helps rank duplicate tickers and keeps risks visible in the scan/audit.
 - Auto-embeds X/Twitter post links and credits the Telegram user who shared the link.
 - `/status` shows backup, keep-alive, live refresh, and current chat tracking health.
 
@@ -49,7 +50,7 @@ Solana-first Telegram scanner bot using free/public data sources.
 Dexscreener API reference: https://docs.dexscreener.com/api/reference
 Dexscreener DEX paid check: https://api.dexscreener.com/orders/v1/solana/{mint}
 RugCheck token report pattern: https://api.rugcheck.xyz/v1/tokens/{mint}/report
-Pump.fun metadata pattern: https://frontend-api-v3.pump.fun/coins/{mint}
+Pump.fun metadata/search patterns: `frontend-api-v3`, `frontend-api-v2`, and `frontend-api.pump.fun` public coin endpoints
 GeckoTerminal OHLCV pattern: https://api.geckoterminal.com/api/v2/networks/solana/pools/{pool}/ohlcv/hour
 Solana RPC methods used: `getTokenSupply`, `getTokenLargestAccounts`, and optionally `getProgramAccounts`
 Jupiter Tokens API search: https://api.jup.ag/tokens/v2/search

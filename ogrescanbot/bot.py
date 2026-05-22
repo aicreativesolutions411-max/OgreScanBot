@@ -43,6 +43,7 @@ from .formatting import (
 from .geckoterminal import GeckoTerminalClient
 from .images import build_pnl_card, build_scan_banner
 from .jupiter import JupiterTokenClient
+from .models import TokenScan
 from .pumpfun import PumpFunClient
 from .rugcheck import RugCheckClient
 from .solana_rpc import SolanaRpcClient, merge_onchain_security
@@ -401,17 +402,16 @@ class OgreScanApp:
         key = strict_filter_setting_key(message.chat.id)
         if args and args[0] in {"on", "true", "strict", "enable", "enabled"}:
             await self.db.set_setting(key, "on")
-            await message.reply("SafeScan is on for manual /scan checks. Auto CA/$ticker posts will still post the best match and show warnings instead of going silent.")
+            await message.reply("SafeScan is on. It will help rank duplicate tickers and log warnings, but found CA/$ticker scans will still post.")
             return
         if args and args[0] in {"off", "false", "loose", "disable", "disabled"}:
             await self.db.set_setting(key, "off")
-            await message.reply("SafeScan is off for this chat. I will still prefer cleaner ticker matches, but scans will be less strict.")
+            await message.reply("SafeScan is off for this chat. I will still post found CA/$ticker scans and use basic ticker ranking.")
             return
         enabled = await self.strict_filter_enabled(message.chat.id)
         await message.reply(
             f"SafeScan is {'on' if enabled else 'off'}.\n\n"
-            "Auto CA/$ticker posts always show the best match the bot can find.\n"
-            "Use /safescan on to make manual /scan block obvious junk, or /safescan off to make manual scans loose too."
+            "Found CA/$ticker scans always post. SafeScan only helps pick cleaner duplicate ticker matches and keeps risk warnings visible."
         )
 
     async def status_command(self, message: Message) -> None:
@@ -616,15 +616,7 @@ class OgreScanApp:
         rug = await self.enrich_security_data(token, rug)
         rejection = strict_scan_rejection(token, rug, auto=auto)
         if rejection and await self.strict_filter_enabled(message.chat.id):
-            if auto:
-                logging.info("SafeScan warning for auto scan %s: %s", token.address, rejection)
-            else:
-                logging.info("SafeScan skipped manual scan %s: %s", token.address, rejection)
-                await message.reply(
-                    f"SafeScan blocked this scan: {html.escape(rejection)}\n\n"
-                    "Auto CA/$ticker posts still show the best match. Use /safescan off in this chat if you want loose manual scans too."
-                )
-                return
+            logging.info("SafeScan warning for %s: %s", token.address, rejection)
 
         user = message.from_user
         caller_id = user.id if user else 0
@@ -671,6 +663,7 @@ class OgreScanApp:
         return normalize_image_bytes(data)
 
     async def resolve_token(self, query: str, include_paid: bool = True, include_ath: bool = True):
+        original_query = query
         query = await self.resolve_scan_query(query)
         token = await self.dex.scan_solana_token(query)
         if token and self.pump:
@@ -686,6 +679,25 @@ class OgreScanApp:
             if include_ath:
                 pump_token = await self.enrich_market_data(pump_token)
             return await self.enrich_dex_paid(pump_token) if include_paid else pump_token
+        if self.pump and not is_solana_address(query):
+            pump_mint = await self.pump.best_token_mint_by_ticker(original_query)
+            if pump_mint:
+                token = await self.dex.scan_solana_token(pump_mint)
+                if token:
+                    token = token.with_pump_metadata(await self.pump.metadata(token.address))
+                    if include_ath:
+                        token = await self.enrich_market_data(token)
+                    return await self.enrich_dex_paid(token) if include_paid else token
+                pump_token = await self.pump.scan_token(pump_mint)
+                if pump_token:
+                    if include_ath:
+                        pump_token = await self.enrich_market_data(pump_token)
+                    return await self.enrich_dex_paid(pump_token) if include_paid else pump_token
+        if is_solana_address(query):
+            fallback = fallback_token_scan(query)
+            if include_ath:
+                fallback = await self.enrich_market_data(fallback)
+            return await self.enrich_dex_paid(fallback) if include_paid else fallback
         return None
 
     async def resolve_scan_query(self, query: str) -> str:
@@ -1088,6 +1100,35 @@ def strict_filter_setting_key(chat_id: int) -> str:
     return f"strict_scan_filter:{chat_id}"
 
 
+def fallback_token_scan(address: str) -> TokenScan:
+    return TokenScan(
+        address=address,
+        name="Unindexed Token",
+        symbol="UNKNOWN",
+        chain_id="solana",
+        dex_id="unindexed",
+        pair_address="",
+        pair_url=f"https://dexscreener.com/solana/{address}",
+        price_usd=None,
+        market_cap=None,
+        fdv=None,
+        liquidity_usd=None,
+        volume_h24=None,
+        price_change_h1=None,
+        price_change_h24=None,
+        buys_h1=None,
+        sells_h1=None,
+        created_at_ms=None,
+        image_url=None,
+        header_url=None,
+        description="Dexscreener and Pump.fun have not indexed this contract yet.",
+        socials=[],
+        websites=[],
+        raw_pair={"fallback": True},
+        dex_paid=None,
+    )
+
+
 def strict_scan_rejection(token, rug, auto: bool = False) -> str | None:
     liquidity = token.liquidity_usd
     cap = token.cap_for_tracking
@@ -1264,7 +1305,7 @@ def scan_links_keyboard(token, rug=None, menu: str = "main") -> InlineKeyboardMa
         add_button_row(
             rows,
             [
-                ("Pump.fun", f"https://pump.fun/{address}"),
+                ("Pump.fun", f"https://pump.fun/coin/{address}"),
                 ("Dexscreener", token.pair_url or f"https://dexscreener.com/solana/{address}"),
             ],
         )

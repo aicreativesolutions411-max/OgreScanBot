@@ -96,6 +96,18 @@ def format_scan_caption(
     current_value = current_multiple(call)
     current = f"{current_value:.2f}x" if current_value is not None else "n/a"
     ath = token_ath_value(token, call)
+    call_section = (
+        f"🧌 <b>Call</b>\n"
+        f"├ {html.escape(status)} by {caller}\n"
+        f"├ Entry MC <b>{called_at}</b> | Now <b>{now}</b>\n"
+        f"└ ATH since call <b>{best}</b> ({multiple_pct(call.peak_multiple if call else None)}) | "
+        f"Current <b>{current}</b> ({multiple_pct(current_value)})"
+        if call
+        else (
+            "🧌 <b>Call</b>\n"
+            "└ CA detected. Market data is not indexed yet, so X tracking starts once MC/FDV is available."
+        )
+    )
     stats = [
         "📊 <b>Token Stats</b>",
         f"├ MC:   <b>{money(token.market_cap or token.fdv)}</b>",
@@ -123,11 +135,7 @@ def format_scan_caption(
         f"└ {scan_social_links(token)}\n\n"
         f"🛡 <b>Audit</b> <b>{audit_badge(rug)}</b>\n"
         f"{audit_status(token, rug)}\n\n"
-        f"🧌 <b>Call</b>\n"
-        f"├ {html.escape(status)} by {caller}\n"
-        f"├ Entry MC <b>{called_at}</b> | Now <b>{now}</b>\n"
-        f"└ ATH since call <b>{best}</b> ({multiple_pct(call.peak_multiple if call else None)}) | "
-        f"Current <b>{current}</b> ({multiple_pct(current_value)})\n\n"
+        f"{call_section}\n\n"
         f"🔎 <b>Links</b>\n"
         f"└ Tap a button below for explain, paid trend, wallet map, charts, trade, security, X, and socials."
         f"{powered_by_footer()}"
@@ -1083,7 +1091,7 @@ def tool_links(token: TokenScan) -> str:
         f"<a href=\"https://app.bubblemaps.io/sol/token/{address}\">BUB</a>",
         f"<a href=\"https://solscan.io/token/{address}\">SOL</a>",
         f"<a href=\"https://birdeye.so/token/{address}?chain=solana\">BIRD</a>",
-        f"<a href=\"https://pump.fun/{address}\">PUMP</a>",
+        f"<a href=\"https://pump.fun/coin/{address}\">PUMP</a>",
         f"<a href=\"https://gmgn.ai/sol/token/{address}\">GMGN</a>",
     ]
     return " • ".join(links)
@@ -1099,7 +1107,7 @@ def scan_tool_links(token: TokenScan) -> str:
     birdeye = f"https://birdeye.so/token/{address}?chain=solana"
     rug = f"https://rugcheck.xyz/tokens/{address}"
     solscan = f"https://solscan.io/token/{address}"
-    pump = f"https://pump.fun/{address}"
+    pump = f"https://pump.fun/coin/{address}"
     gmgn = f"https://gmgn.ai/sol/token/{address}"
     bub = f"https://app.bubblemaps.io/sol/token/{address}"
     return (
