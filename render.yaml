@@ -30,6 +30,12 @@ services:
         value: https://api.mainnet-beta.solana.com
       - key: ENABLE_SOLANA_HOLDER_COUNT
         value: false
+      - key: ENABLE_JUPITER_TOKENS
+        value: true
+      - key: JUPITER_API_KEY
+        sync: false
+      - key: STRICT_AUTO_SCAN_FILTER
+        value: true
       - key: CALL_UPDATE_INTERVAL_SECONDS
         value: 180
       - key: CALL_UPDATE_LIMIT

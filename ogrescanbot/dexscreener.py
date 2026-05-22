@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import math
+import time
+
 import aiohttp
 
 from .extract import is_solana_address
@@ -17,7 +20,7 @@ class DexscreenerClient:
     async def close(self) -> None:
         await self._session.close()
 
-    async def scan_solana_token(self, token_address: str) -> TokenScan | None:
+    async def scan_solana_token(self, token_address: str, strict_ticker: bool = True) -> TokenScan | None:
         query = str(token_address or "").strip()
         query_is_address = is_solana_address(query)
         pairs = await self._token_pairs(query) if query_is_address else []
@@ -29,7 +32,7 @@ class DexscreenerClient:
         pairs = [pair for pair in pairs if pair.get("chainId") == "solana"]
         if not pairs:
             return None
-        pair = _select_pair(pairs, query, query_is_address)
+        pair = _select_pair(pairs, query, query_is_address, strict_ticker=strict_ticker)
         if not pair and query_is_address:
             pair = _max_liquidity_pair(_pair_address_matches(pairs, query))
         if not pair:
@@ -135,7 +138,7 @@ def _int_or_none(value: object) -> int | None:
         return None
 
 
-def _select_pair(pairs: list[dict], query: str, query_is_address: bool) -> dict | None:
+def _select_pair(pairs: list[dict], query: str, query_is_address: bool, strict_ticker: bool = True) -> dict | None:
     if query_is_address:
         matches = [
             pair
@@ -152,7 +155,9 @@ def _select_pair(pairs: list[dict], query: str, query_is_address: bool) -> dict 
         for pair in pairs
         if str((pair.get("baseToken") or {}).get("symbol") or "").strip().upper() == symbol
     ]
-    return _max_liquidity_pair(matches)
+    if not strict_ticker and not matches:
+        matches = pairs
+    return _best_ticker_pair(matches)
 
 
 def _same_base_pairs(pairs: list[dict], base_address: str) -> list[dict]:
@@ -171,6 +176,81 @@ def _max_liquidity_pair(pairs: list[dict]) -> dict | None:
     if not pairs:
         return None
     return max(pairs, key=lambda item: float((item.get("liquidity") or {}).get("usd") or 0))
+
+
+def _best_ticker_pair(pairs: list[dict]) -> dict | None:
+    candidates = [_best_pair_for_token(token_pairs) for token_pairs in _pairs_by_base(pairs).values()]
+    candidates = [pair for pair in candidates if pair]
+    if not candidates:
+        return None
+    liquid = [pair for pair in candidates if _nested_float(pair, "liquidity", "usd") and _nested_float(pair, "liquidity", "usd") > 0]
+    candidates = liquid or candidates
+    candidates.sort(key=_ticker_pair_score, reverse=True)
+    return candidates[0]
+
+
+def _pairs_by_base(pairs: list[dict]) -> dict[str, list[dict]]:
+    groups: dict[str, list[dict]] = {}
+    for pair in pairs:
+        address = _token_address(pair.get("baseToken"))
+        if address:
+            groups.setdefault(address, []).append(pair)
+    return groups
+
+
+def _best_pair_for_token(pairs: list[dict]) -> dict | None:
+    if not pairs:
+        return None
+    return max(pairs, key=_pair_liquidity_volume_score)
+
+
+def _pair_liquidity_volume_score(pair: dict) -> float:
+    return (
+        (_nested_float(pair, "liquidity", "usd") or 0) * 3
+        + (_nested_float(pair, "volume", "h24") or 0)
+    )
+
+
+def _ticker_pair_score(pair: dict) -> float:
+    liquidity = _nested_float(pair, "liquidity", "usd") or 0
+    volume = _nested_float(pair, "volume", "h24") or 0
+    market_cap = _float_or_none(pair.get("marketCap")) or _float_or_none(pair.get("fdv")) or 0
+    created_at = _int_or_none(pair.get("pairCreatedAt")) or 0
+    info = pair.get("info") if isinstance(pair.get("info"), dict) else {}
+    socials = info.get("socials") if isinstance(info.get("socials"), list) else []
+    websites = info.get("websites") if isinstance(info.get("websites"), list) else []
+    boosts = pair.get("boosts") if isinstance(pair.get("boosts"), dict) else {}
+
+    score = 0.0
+    score += math.log1p(max(market_cap, 0)) * 15
+    score += math.log1p(max(liquidity, 0)) * 20
+    score += math.log1p(max(volume, 0)) * 5
+    if created_at > 0:
+        score += min(500.0, max(0.0, ((time.time() * 1000) - created_at) / 86_400_000) * 2)
+    if socials:
+        score += 350
+    if websites:
+        score += 200
+    if info.get("imageUrl") or info.get("header"):
+        score += 50
+    if _float_or_none(boosts.get("active")):
+        score += 50
+    if liquidity <= 0:
+        score -= 100_000
+    elif liquidity < 1_000:
+        score -= 750
+    if market_cap <= 0:
+        score -= 500
+    if not socials and not websites:
+        score -= 1_000
+    return score
+
+
+def _nested_float(item: dict, outer_key: str, inner_key: str) -> float | None:
+    nested = item.get(outer_key) if isinstance(item, dict) else None
+    if not isinstance(nested, dict):
+        return None
+    return _float_or_none(nested.get(inner_key))
 
 
 def _token_address(token: object) -> str | None:

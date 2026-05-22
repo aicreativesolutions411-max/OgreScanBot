@@ -7,6 +7,7 @@ Solana-first Telegram scanner bot using free/public data sources.
 - Auto-detects Solana contract addresses, supported token links, and `$ticker` mentions in group chats.
 - Scans tokens with Dexscreener.
 - Uses exact ticker aliases before search, so `$OGRE` resolves to the official OgreCoin contract.
+- Resolves `$ticker` scans through safer ranking: Jupiter verified/popular tokens when configured, then exact Dexscreener ticker candidates ranked by MC, liquidity, age, socials, and volume.
 - Records the first caller for each token in each chat.
 - Refreshes tracked calls from free APIs in the background so ATH/peak X keeps moving.
 - Pings its own `/healthz` endpoint when hosted with webhooks so free hosts are less likely to idle out.
@@ -28,6 +29,7 @@ Solana-first Telegram scanner bot using free/public data sources.
 - Scan captions use compact icon sections for token stats, socials, audit, and calls, with categorized button menus for Smart Intel, charts, X links, security, socials, and trade tools. The trade menu includes OgreTradeBot.
 - Auto-scan only reads the new message text/caption, so replying to an old CA does not trigger a scan unless the reply itself includes a `$ticker` or CA.
 - Adds quick links for BubbleMaps, RugCheck, Pump.fun, GMGN, DEX, and X searches for high-engagement recent posts.
+- Adds SafeScan filtering with `/safescan on` so groups can skip obvious honeypot/copy behavior. Low liquidity alone is allowed for fresh launches; blocking focuses on zero liquidity, missing market data, active freeze authority, no metadata/socials plus tiny liquidity, dev-sold/no-metadata combinations, extreme risk counts, and extreme holder concentration with no metadata.
 - Auto-embeds X/Twitter post links and credits the Telegram user who shared the link.
 - `/status` shows backup, keep-alive, live refresh, and current chat tracking health.
 
@@ -39,6 +41,7 @@ Solana-first Telegram scanner bot using free/public data sources.
 - Optional Pump.fun public metadata endpoint
 - Optional GeckoTerminal public OHLCV endpoint for token ATH estimates
 - Optional Solana RPC for on-chain token supply and top-holder concentration checks
+- Optional Jupiter Tokens API for verified/popular `$ticker` resolution
 - Local SQLite database
 - Optional external Postgres database through `DATABASE_URL` for Render deploys that must remember calls across updates
 - Optional Telegram backup channel for SQLite persistence without Postgres
@@ -49,6 +52,7 @@ RugCheck token report pattern: https://api.rugcheck.xyz/v1/tokens/{mint}/report
 Pump.fun metadata pattern: https://frontend-api-v3.pump.fun/coins/{mint}
 GeckoTerminal OHLCV pattern: https://api.geckoterminal.com/api/v2/networks/solana/pools/{pool}/ohlcv/hour
 Solana RPC methods used: `getTokenSupply`, `getTokenLargestAccounts`, and optionally `getProgramAccounts`
+Jupiter Tokens API search: https://api.jup.ag/tokens/v2/search
 
 ## Setup
 
@@ -92,6 +96,8 @@ leaderboard
 /lb 1w
 /lb 2w
 /lb 1m
+/safescan on
+/safescan off
 /status
 /backup
 /help
@@ -125,6 +131,8 @@ ATH shown in scans uses GeckoTerminal free OHLCV candles when a pool is availabl
 Supply and top-holder concentration use Solana RPC when `ENABLE_SOLANA_RPC=true`. The default public RPC is free but rate-limited. For best reliability, set `SOLANA_RPC_URL` to a free RPC endpoint from a provider such as Helius, QuickNode, Alchemy, or Triton. Exact holder count requires the heavier `ENABLE_SOLANA_HOLDER_COUNT=true`, and should only be used with a good RPC because many public endpoints block or throttle that call.
 
 Smart Intel uses free data. Paid-trend impact improves after the bot has multiple snapshots for a token. Cluster checks use cautious wording and are not proof of wallet relationships. Explain-my-loss uses tracked calls/current market data unless a future wallet-history layer is added.
+
+Ticker safety: if `JUPITER_API_KEY` is set, `$ticker` scans prefer Jupiter verified/high-organic tokens before falling back to Dexscreener. Without a Jupiter key, Dexscreener fallback still requires exact symbol matches and ranks candidates by market cap, liquidity, age, socials, and volume while heavily penalizing zero-liquidity/no-social copies.
 
 `TICKER_ALIASES` lets you force exact ticker matches before Dexscreener search. It defaults to:
 

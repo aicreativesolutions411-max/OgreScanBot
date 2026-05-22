@@ -42,6 +42,7 @@ from .formatting import (
 )
 from .geckoterminal import GeckoTerminalClient
 from .images import build_pnl_card, build_scan_banner
+from .jupiter import JupiterTokenClient
 from .pumpfun import PumpFunClient
 from .rugcheck import RugCheckClient
 from .solana_rpc import SolanaRpcClient, merge_onchain_security
@@ -60,6 +61,7 @@ class OgreScanApp:
         self.gecko = GeckoTerminalClient() if settings.enable_geckoterminal_ath else None
         self.rug = RugCheckClient() if settings.enable_rugcheck else None
         self.pump = PumpFunClient() if settings.enable_pump_metadata else None
+        self.jupiter = JupiterTokenClient(settings.jupiter_api_key) if settings.enable_jupiter_tokens else None
         self.solana = (
             SolanaRpcClient(settings.solana_rpc_url, settings.enable_solana_holder_count)
             if settings.enable_solana_rpc
@@ -92,6 +94,8 @@ class OgreScanApp:
                 await self.rug.close()
             if self.pump:
                 await self.pump.close()
+            if self.jupiter:
+                await self.jupiter.close()
             if self.solana:
                 await self.solana.close()
             await self.db.close()
@@ -150,6 +154,8 @@ class OgreScanApp:
             await self.rug.close()
         if self.pump:
             await self.pump.close()
+        if self.jupiter:
+            await self.jupiter.close()
         if self.solana:
             await self.solana.close()
         await self.db.close()
@@ -168,6 +174,7 @@ class OgreScanApp:
         self.dp.message.register(self.calls_command, lambda message: is_plain_calls_command(message.text or ""))
         self.dp.message.register(self.leaderboard_command, Command("lb", "leaderboard"))
         self.dp.message.register(self.leaderboard_command, lambda message: is_plain_leaderboard_command(message.text or ""))
+        self.dp.message.register(self.safe_scan_command, Command("safescan", "filters"))
         self.dp.callback_query.register(self.leaderboard_period_callback, F.data.startswith("lb:"))
         self.dp.callback_query.register(self.scan_links_callback, F.data.startswith("scanmenu:"))
         self.dp.callback_query.register(self.trader_menu_callback, F.data.startswith("trader:"))
@@ -196,7 +203,7 @@ class OgreScanApp:
         await self.maybe_embed_x_posts(message)
         query = first_token_query_from_message(message, include_reply=False)
         if query:
-            await self.scan_and_reply(message, query)
+            await self.scan_and_reply(message, query, auto=True)
 
     async def maybe_embed_x_posts(self, message: Message) -> None:
         links = extract_x_post_links(message.text or message.caption or "")
@@ -389,6 +396,24 @@ class OgreScanApp:
         period, text, markup = await self.build_leaderboard_message(message.chat.id, args[0] if args else "1d")
         await message.reply(text, reply_markup=markup, disable_web_page_preview=True)
 
+    async def safe_scan_command(self, message: Message) -> None:
+        args = [arg.lower() for arg in command_args(message)]
+        key = strict_filter_setting_key(message.chat.id)
+        if args and args[0] in {"on", "true", "strict", "enable", "enabled"}:
+            await self.db.set_setting(key, "on")
+            await message.reply("SafeScan is on. I will skip zero-liquidity, no-social tiny/new tokens, and obvious freeze-risk scans in this chat.")
+            return
+        if args and args[0] in {"off", "false", "loose", "disable", "disabled"}:
+            await self.db.set_setting(key, "off")
+            await message.reply("SafeScan is off for this chat. I will still prefer cleaner ticker matches, but scans will be less strict.")
+            return
+        enabled = await self.strict_filter_enabled(message.chat.id)
+        await message.reply(
+            f"SafeScan is {'on' if enabled else 'off'}.\n\n"
+            "Use /safescan on to skip honeypot-looking tokens, zero liquidity, missing market data, and no-social tiny/new copies.\n"
+            "Use /safescan off if your group wants every scan attempt posted."
+        )
+
     async def status_command(self, message: Message) -> None:
         stats = await self.db.stats(message.chat.id, None, self.settings.min_multiple_for_hit)
         await message.reply(
@@ -580,11 +605,23 @@ class OgreScanApp:
         except Exception:
             logging.exception("Auto-set backup channel message failed.")
 
-    async def scan_and_reply(self, message: Message, query: str) -> None:
+    async def scan_and_reply(self, message: Message, query: str, auto: bool = False) -> None:
         await message.bot.send_chat_action(message.chat.id, "typing")
         token = await self.resolve_token(query)
         if not token:
             await message.reply("I could not find that Solana token on Dexscreener or Pump.fun yet.")
+            return
+
+        rug = await self.rug.summary(token.address) if self.rug else None
+        rug = await self.enrich_security_data(token, rug)
+        rejection = strict_scan_rejection(token, rug, auto=auto)
+        if rejection and await self.strict_filter_enabled(message.chat.id):
+            logging.info("SafeScan skipped %s: %s", token.address, rejection)
+            if not auto:
+                await message.reply(
+                    f"SafeScan blocked this scan: {html.escape(rejection)}\n\n"
+                    "Use /safescan off in this chat if you want loose scanning."
+                )
             return
 
         user = message.from_user
@@ -595,9 +632,6 @@ class OgreScanApp:
             await self.maybe_backup_database()
         except ValueError:
             call, is_new_call = None, False
-
-        rug = await self.rug.summary(token.address) if self.rug else None
-        rug = await self.enrich_security_data(token, rug)
         await self.db.add_token_snapshot(message.chat.id, token, snapshot_holder_count(rug))
         scan_text = photo_caption(format_scan_caption(token, call, is_new_call, rug), limit=1000)
         banner = await self.build_scan_photo(token)
@@ -635,7 +669,7 @@ class OgreScanApp:
         return normalize_image_bytes(data)
 
     async def resolve_token(self, query: str, include_paid: bool = True, include_ath: bool = True):
-        query = self.resolve_ticker_alias(query)
+        query = await self.resolve_scan_query(query)
         token = await self.dex.scan_solana_token(query)
         if token and self.pump:
             token = token.with_pump_metadata(await self.pump.metadata(token.address))
@@ -651,6 +685,16 @@ class OgreScanApp:
                 pump_token = await self.enrich_market_data(pump_token)
             return await self.enrich_dex_paid(pump_token) if include_paid else pump_token
         return None
+
+    async def resolve_scan_query(self, query: str) -> str:
+        resolved = self.resolve_ticker_alias(query)
+        if is_solana_address(resolved):
+            return resolved
+        if self.jupiter:
+            mint = await self.jupiter.best_token_mint(resolved)
+            if mint:
+                return mint
+        return resolved
 
     async def enrich_market_data(self, token):
         if self.gecko:
@@ -670,6 +714,12 @@ class OgreScanApp:
             return rug
         onchain = await self.solana.security_summary(token.address)
         return merge_onchain_security(rug, onchain)
+
+    async def strict_filter_enabled(self, chat_id: int) -> bool:
+        value = await self.db.get_setting(strict_filter_setting_key(chat_id))
+        if value is None:
+            return self.settings.strict_auto_scan_filter
+        return value.lower() in {"1", "true", "yes", "on", "strict", "enabled"}
 
     def resolve_ticker_alias(self, query: str) -> str:
         clean = str(query or "").strip()
@@ -1030,6 +1080,43 @@ def snapshot_holder_count(rug) -> int | None:
     if not rug or getattr(rug, "holder_count_source", None) != "Solana RPC":
         return None
     return rug.holder_count
+
+
+def strict_filter_setting_key(chat_id: int) -> str:
+    return f"strict_scan_filter:{chat_id}"
+
+
+def strict_scan_rejection(token, rug, auto: bool = False) -> str | None:
+    liquidity = token.liquidity_usd
+    cap = token.cap_for_tracking
+    has_metadata = bool(token.socials or token.websites or token.description or token.image_url or token.header_url)
+    if liquidity is None or liquidity <= 0:
+        return "zero or missing liquidity"
+    if cap is None or cap <= 0 or token.price_usd is None:
+        return "missing core market data"
+    if rug and getattr(rug, "freeze_authority", None):
+        return "freeze authority appears active"
+    if not has_metadata and liquidity < 500:
+        return "near-zero liquidity with no metadata/socials"
+    if auto and not has_metadata and liquidity < 2_000 and (cap < 250_000 or token_is_new(token)):
+        return "no metadata/socials on a tiny low-liquidity token"
+    if auto and rug and rug.mint_authority and not has_metadata and liquidity < 10_000:
+        return "mint authority active with no metadata/socials"
+    if rug and rug.dev_sold is True and not has_metadata and liquidity < 10_000:
+        return "dev sold with no metadata/socials"
+    if rug and rug.risk_count is not None and rug.risk_count >= 6 and not has_metadata and liquidity < 10_000:
+        return "too many risk flags with no metadata/socials"
+    if rug and rug.risk_count is not None and rug.risk_count >= 9 and liquidity < 10_000:
+        return "extreme risk flags on a low-liquidity token"
+    if rug and rug.top_10_holder_pct is not None and rug.top_10_holder_pct >= 85 and liquidity < 10_000 and not has_metadata:
+        return "extreme holder concentration with no metadata/socials"
+    return None
+
+
+def token_is_new(token) -> bool:
+    if not token.created_at_ms:
+        return False
+    return (time.time() - (token.created_at_ms / 1000)) < 86_400
 
 
 def first_token_query_from_message(message: Message, include_reply: bool = False) -> str | None:

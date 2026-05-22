@@ -24,6 +24,9 @@ class Settings:
     enable_solana_rpc: bool
     solana_rpc_url: str
     enable_solana_holder_count: bool
+    enable_jupiter_tokens: bool
+    jupiter_api_key: str
+    strict_auto_scan_filter: bool
     run_mode: str
     webhook_url: str
     webhook_path: str
@@ -70,6 +73,9 @@ def load_settings() -> Settings:
         or "https://api.mainnet-beta.solana.com",
         enable_solana_holder_count=os.getenv("ENABLE_SOLANA_HOLDER_COUNT", "false").lower()
         in {"1", "true", "yes", "on"},
+        enable_jupiter_tokens=os.getenv("ENABLE_JUPITER_TOKENS", "true").lower() in {"1", "true", "yes", "on"},
+        jupiter_api_key=os.getenv("JUPITER_API_KEY", "").strip(),
+        strict_auto_scan_filter=os.getenv("STRICT_AUTO_SCAN_FILTER", "true").lower() in {"1", "true", "yes", "on"},
         run_mode=os.getenv("RUN_MODE", "polling").strip().lower() or "polling",
         webhook_url=webhook_url,
         webhook_path=webhook_path,
