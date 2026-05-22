@@ -191,7 +191,8 @@ def format_status(settings, backup_chat_id: str, stats: dict[str, float | int] |
         f"├ Live calls <b>{settings.call_update_interval_seconds}s</b> / {settings.call_update_limit} calls\n"
         f"├ RugCheck  <b>{on_off(settings.enable_rugcheck)}</b>\n"
         f"├ Pump meta <b>{on_off(settings.enable_pump_metadata)}</b>\n"
-        f"└ Gecko ATH <b>{on_off(settings.enable_geckoterminal_ath)}</b>\n\n"
+        f"├ Gecko ATH <b>{on_off(settings.enable_geckoterminal_ath)}</b>\n"
+        f"└ Solana RPC <b>{on_off(settings.enable_solana_rpc)}</b>\n\n"
         f"<b>This Chat</b>\n"
         f"├ Calls    <b>{int(stats.get('calls', 0))}</b>\n"
         f"├ Best     <b>{float(stats.get('return', 0)):.2f}x</b>\n"
@@ -491,6 +492,8 @@ def pct(value: float | None) -> str:
 
 
 def supply_value(token: TokenScan) -> str:
+    if token.supply:
+        return compact_number(token.supply)
     if not token.price_usd or token.price_usd <= 0 or not token.cap_for_tracking:
         return "n/a"
     return compact_number(token.cap_for_tracking / token.price_usd)
@@ -605,7 +608,7 @@ def call_current_pct(call: CallRecord) -> float:
 
 def explainer_mode_label(mode: str) -> str:
     labels = {
-        "simple": "Simple",
+        "simple": "Overview",
         "degen": "Degen",
         "risk": "Risk",
         "whale": "Whale",
@@ -644,8 +647,10 @@ def holder_meaning(rug: RugSummary | None) -> str:
         return "Holder data was not available from the free RugCheck endpoint."
     pct = rug.top_10_holder_pct if rug.top_10_holder_pct is not None else rug.top_holder_pct
     if pct is None:
-        return f"Holder count: {rug.holder_count or 'n/a'}, concentration not returned."
-    total = f" across {rug.holder_count} holders" if rug.holder_count else ""
+        return "Holder concentration was not returned by the free RugCheck endpoint."
+    total = ""
+    if rug.holder_count and rug.holder_count_source == "Solana RPC":
+        total = f" across {rug.holder_count} on-chain holders"
     if pct >= 30:
         return f"Concentrated: top holders control about {pct:.1f}%{total}."
     if pct >= 15:
@@ -683,12 +688,10 @@ def paid_before_after_lines(
         return (
             "└ No earlier snapshot yet. Scan or check this token again later to measure before/after boost impact."
         )
-    holder_now = rug.holder_count if rug else latest_snapshot.holder_count
     lines = [
         f"├ MC {money(first_snapshot.market_cap)} → {money(token.cap_for_tracking)} ({delta_pct(first_snapshot.market_cap, token.cap_for_tracking)})",
         f"├ Vol {money(first_snapshot.volume_h24)} → {money(token.volume_h24)} ({delta_pct(first_snapshot.volume_h24, token.volume_h24)})",
-        f"├ LP {money(first_snapshot.liquidity_usd)} → {money(token.liquidity_usd)} ({delta_pct(first_snapshot.liquidity_usd, token.liquidity_usd)})",
-        f"└ Holders {first_snapshot.holder_count or 'n/a'} → {holder_now or 'n/a'}",
+        f"└ LP {money(first_snapshot.liquidity_usd)} → {money(token.liquidity_usd)} ({delta_pct(first_snapshot.liquidity_usd, token.liquidity_usd)})",
     ]
     return "\n".join(lines)
 
@@ -708,8 +711,10 @@ def cluster_signals(token: TokenScan, rug: RugSummary | None) -> list[str]:
     signals: list[str] = []
     if rug and rug.top_10_holder_pct is not None and rug.top_10_holder_pct >= 30:
         signals.append(f"Possible concentration cluster: top 10 holders around {rug.top_10_holder_pct:.1f}%")
-    if rug and rug.holder_count is not None and rug.holder_count < 100:
-        signals.append(f"Holder base is still small: {rug.holder_count} total holders")
+    if rug and rug.top_10_holder_pct is not None and rug.top_10_holder_pct < 15:
+        signals.append(f"Lower visible holder concentration: top 10 around {rug.top_10_holder_pct:.1f}%")
+    if rug and rug.holder_count is not None and rug.holder_count_source == "Solana RPC" and rug.holder_count < 100:
+        signals.append(f"Small holder base from on-chain RPC: {rug.holder_count} holders")
     if token.created_at_ms:
         age = age_from_ms(token.created_at_ms)
         if age.endswith("m") or age.endswith("h"):
@@ -933,8 +938,8 @@ def rug_top_10_holders(rug: RugSummary | None) -> str:
         return "n/a"
     pct_value = rug.top_10_holder_pct if rug.top_10_holder_pct is not None else rug.top_holder_pct
     pct = f"{pct_value:.1f}%" if pct_value is not None else "n/a"
-    if rug.holder_count is not None:
-        return f"{pct} | {rug.holder_count} total"
+    if rug.holder_count is not None and rug.holder_count_source == "Solana RPC":
+        return f"{pct} | {rug.holder_count} holders"
     return pct
 
 

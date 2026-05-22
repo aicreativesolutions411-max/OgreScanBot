@@ -47,6 +47,8 @@ class RugCheckClient:
             dev_sold=_detect_dev_sold(data) if isinstance(data, dict) else None,
             dev_wallet=_dev_wallet(data) if isinstance(data, dict) else None,
             raw=data if isinstance(data, dict) else {},
+            holder_count_source="RugCheck" if _holder_count(data) is not None else None,
+            concentration_source="RugCheck" if top_pct is not None or top_10_pct is not None else None,
         )
 
 
@@ -115,7 +117,9 @@ def _market_addresses(data: dict) -> set[str]:
 
 
 def _holder_count(data: dict) -> int | None:
-    for key in ("holderCount", "holders", "totalHolders", "total_holders", "numHolders"):
+    # Avoid the generic "holders" key: some free endpoints use it for token
+    # accounts or sampled holder rows, which can disagree with chart UIs.
+    for key in ("holderCount", "totalHolders", "total_holders", "numHolders"):
         value = data.get(key)
         if isinstance(value, int):
             return value
@@ -123,7 +127,7 @@ def _holder_count(data: dict) -> int | None:
         if parsed is not None:
             return int(parsed)
     token = data.get("token") if isinstance(data.get("token"), dict) else {}
-    for key in ("holderCount", "holders", "totalHolders"):
+    for key in ("holderCount", "totalHolders"):
         value = token.get(key)
         if isinstance(value, int):
             return value

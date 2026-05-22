@@ -37,6 +37,8 @@ class TokenScan:
     ath_price_usd: float | None = None
     ath_market_cap: float | None = None
     ath_timestamp: int | None = None
+    supply: float | None = None
+    supply_source: str | None = None
 
     @property
     def cap_for_tracking(self) -> float | None:
@@ -91,6 +93,8 @@ class RugSummary:
     dev_sold: bool | None
     dev_wallet: str | None
     raw: dict[str, Any]
+    holder_count_source: str | None = None
+    concentration_source: str | None = None
 
 
 PUMP_BONDING_COMPLETE_USD = 69_000.0

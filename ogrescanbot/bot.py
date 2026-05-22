@@ -44,6 +44,7 @@ from .geckoterminal import GeckoTerminalClient
 from .images import build_pnl_card, build_scan_banner
 from .pumpfun import PumpFunClient
 from .rugcheck import RugCheckClient
+from .solana_rpc import SolanaRpcClient, merge_onchain_security
 
 
 class OgreScanApp:
@@ -59,6 +60,11 @@ class OgreScanApp:
         self.gecko = GeckoTerminalClient() if settings.enable_geckoterminal_ath else None
         self.rug = RugCheckClient() if settings.enable_rugcheck else None
         self.pump = PumpFunClient() if settings.enable_pump_metadata else None
+        self.solana = (
+            SolanaRpcClient(settings.solana_rpc_url, settings.enable_solana_holder_count)
+            if settings.enable_solana_rpc
+            else None
+        )
         self.last_backup_at = 0.0
         self.backup_task: asyncio.Task | None = None
         self.call_tracker_task: asyncio.Task | None = None
@@ -86,6 +92,8 @@ class OgreScanApp:
                 await self.rug.close()
             if self.pump:
                 await self.pump.close()
+            if self.solana:
+                await self.solana.close()
             await self.db.close()
             await self.bot.session.close()
 
@@ -142,6 +150,8 @@ class OgreScanApp:
             await self.rug.close()
         if self.pump:
             await self.pump.close()
+        if self.solana:
+            await self.solana.close()
         await self.db.close()
         await self.bot.session.close()
 
@@ -212,6 +222,7 @@ class OgreScanApp:
             return
 
         rug = await self.rug.summary(token.address) if self.rug else None
+        rug = await self.enrich_security_data(token, rug)
         call = await self.db.get_call(message.chat.id, token.address)
         first_snapshot, latest_snapshot = await self.db.token_snapshot_range(message.chat.id, token.address)
         view = {"whylose": "why", "boosts": "paid", "explain": "exs", "intel": "exs"}.get(command, command)
@@ -225,7 +236,7 @@ class OgreScanApp:
             first_snapshot=first_snapshot,
             latest_snapshot=latest_snapshot,
         )
-        await self.db.add_token_snapshot(message.chat.id, token, rug.holder_count if rug else None)
+        await self.db.add_token_snapshot(message.chat.id, token, snapshot_holder_count(rug))
         await message.reply(
             text,
             reply_markup=smart_intel_keyboard(token.address, view),
@@ -422,6 +433,7 @@ class OgreScanApp:
 
         needs_rug = menu in {"security", "exs", "exd", "exr", "exw", "exo", "paid", "cluster", "why", "scan"}
         rug = await self.rug.summary(token.address) if self.rug and needs_rug else None
+        rug = await self.enrich_security_data(token, rug) if needs_rug else rug
         if menu in {"exs", "exd", "exr", "exw", "exo", "paid", "cluster", "why", "scan"}:
             call = await self.db.get_call(callback.message.chat.id, token.address)
             first_snapshot, latest_snapshot = await self.db.token_snapshot_range(callback.message.chat.id, token.address)
@@ -440,7 +452,7 @@ class OgreScanApp:
                     ),
                     limit=1000,
                 )
-                await self.db.add_token_snapshot(callback.message.chat.id, token, rug.holder_count if rug else None)
+                await self.db.add_token_snapshot(callback.message.chat.id, token, snapshot_holder_count(rug))
             markup = scan_links_keyboard(token, rug, menu=menu if menu != "scan" else "main")
             try:
                 if getattr(callback.message, "photo", None):
@@ -492,7 +504,7 @@ class OgreScanApp:
             "intel": "simple",
             "explain": "simple",
             "exs": "simple",
-            "exd": "degen",
+            "exd": "simple",
             "exr": "risk",
             "exw": "whale",
             "exo": "owner",
@@ -585,7 +597,8 @@ class OgreScanApp:
             call, is_new_call = None, False
 
         rug = await self.rug.summary(token.address) if self.rug else None
-        await self.db.add_token_snapshot(message.chat.id, token, rug.holder_count if rug else None)
+        rug = await self.enrich_security_data(token, rug)
+        await self.db.add_token_snapshot(message.chat.id, token, snapshot_holder_count(rug))
         scan_text = photo_caption(format_scan_caption(token, call, is_new_call, rug), limit=1000)
         banner = await self.build_scan_photo(token)
         links = scan_links_keyboard(token, rug)
@@ -642,6 +655,8 @@ class OgreScanApp:
     async def enrich_market_data(self, token):
         if self.gecko:
             token = await self.gecko.enrich_ath(token)
+        if self.solana:
+            token = await self.solana.enrich_token_supply(token)
         return token
 
     async def enrich_dex_paid(self, token):
@@ -649,6 +664,12 @@ class OgreScanApp:
         if paid is None:
             return token
         return replace(token, dex_paid=bool(token.dex_paid or paid))
+
+    async def enrich_security_data(self, token, rug):
+        if not self.solana:
+            return rug
+        onchain = await self.solana.security_summary(token.address)
+        return merge_onchain_security(rug, onchain)
 
     def resolve_ticker_alias(self, query: str) -> str:
         clean = str(query or "").strip()
@@ -1003,6 +1024,12 @@ def trader_name_from_calls(user_id: int, calls) -> str:
     return str(user_id)
 
 
+def snapshot_holder_count(rug) -> int | None:
+    if not rug or getattr(rug, "holder_count_source", None) != "Solana RPC":
+        return None
+    return rug.holder_count
+
+
 def first_token_query_from_message(message: Message, include_reply: bool = False) -> str | None:
     sources = [message.text, message.caption]
     reply = getattr(message, "reply_to_message", None)
@@ -1063,7 +1090,7 @@ def trader_menu_keyboard(user_id: int, active_view: str) -> InlineKeyboardMarkup
 def smart_intel_keyboard(address: str, active_view: str = "exs") -> InlineKeyboardMarkup:
     rows = [
         [
-            intel_button("Simple Read", "exs", address, active_view),
+            intel_button("Overview", "exs", address, active_view),
             intel_button("Risk Check", "exr", address, active_view),
         ],
         [

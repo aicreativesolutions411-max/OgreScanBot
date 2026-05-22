@@ -24,6 +24,12 @@ services:
         value: true
       - key: ENABLE_GECKOTERMINAL_ATH
         value: true
+      - key: ENABLE_SOLANA_RPC
+        value: true
+      - key: SOLANA_RPC_URL
+        value: https://api.mainnet-beta.solana.com
+      - key: ENABLE_SOLANA_HOLDER_COUNT
+        value: false
       - key: CALL_UPDATE_INTERVAL_SECONDS
         value: 180
       - key: CALL_UPDATE_LIMIT

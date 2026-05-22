@@ -18,6 +18,9 @@ class Settings:
     enable_rugcheck: bool
     enable_pump_metadata: bool
     enable_geckoterminal_ath: bool
+    enable_solana_rpc: bool
+    solana_rpc_url: str
+    enable_solana_holder_count: bool
     run_mode: str
     webhook_url: str
     webhook_path: str
@@ -58,6 +61,11 @@ def load_settings() -> Settings:
         enable_rugcheck=os.getenv("ENABLE_RUGCHECK", "true").lower() in {"1", "true", "yes", "on"},
         enable_pump_metadata=os.getenv("ENABLE_PUMP_METADATA", "true").lower() in {"1", "true", "yes", "on"},
         enable_geckoterminal_ath=os.getenv("ENABLE_GECKOTERMINAL_ATH", "true").lower()
+        in {"1", "true", "yes", "on"},
+        enable_solana_rpc=os.getenv("ENABLE_SOLANA_RPC", "true").lower() in {"1", "true", "yes", "on"},
+        solana_rpc_url=os.getenv("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com").strip()
+        or "https://api.mainnet-beta.solana.com",
+        enable_solana_holder_count=os.getenv("ENABLE_SOLANA_HOLDER_COUNT", "false").lower()
         in {"1", "true", "yes", "on"},
         run_mode=os.getenv("RUN_MODE", "polling").strip().lower() or "polling",
         webhook_url=webhook_url,

@@ -22,6 +22,7 @@ Solana-first Telegram scanner bot using free/public data sources.
 - Pulls token metadata images/descriptions from Dexscreener and falls back to Pump.fun public metadata when available.
 - Uses Dexscreener pair fallbacks plus Pump.fun cap metadata when Dex does not return market cap/FDV on the selected pair.
 - Shows DEX paid status and RugCheck dev-sold status when free endpoints return it.
+- Verifies token supply and top-holder concentration directly through Solana RPC when enabled.
 - Adds an Explain button on every scan for a quick human-readable token risk read using free scan and RugCheck data.
 - Adds Smart Token Intelligence: explain modes, paid trend check, cautious wallet cluster read, and explain-my-loss views.
 - Scan captions use compact icon sections for token stats, socials, audit, and calls, with categorized button menus for Smart Intel, charts, X links, security, socials, and trade tools. The trade menu includes OgreTradeBot.
@@ -37,6 +38,7 @@ Solana-first Telegram scanner bot using free/public data sources.
 - Optional RugCheck public report endpoint
 - Optional Pump.fun public metadata endpoint
 - Optional GeckoTerminal public OHLCV endpoint for token ATH estimates
+- Optional Solana RPC for on-chain token supply and top-holder concentration checks
 - Local SQLite database
 - Optional external Postgres database through `DATABASE_URL` for Render deploys that must remember calls across updates
 - Optional Telegram backup channel for SQLite persistence without Postgres
@@ -46,6 +48,7 @@ Dexscreener DEX paid check: https://api.dexscreener.com/orders/v1/solana/{mint}
 RugCheck token report pattern: https://api.rugcheck.xyz/v1/tokens/{mint}/report
 Pump.fun metadata pattern: https://frontend-api-v3.pump.fun/coins/{mint}
 GeckoTerminal OHLCV pattern: https://api.geckoterminal.com/api/v2/networks/solana/pools/{pool}/ohlcv/hour
+Solana RPC methods used: `getTokenSupply`, `getTokenLargestAccounts`, and optionally `getProgramAccounts`
 
 ## Setup
 
@@ -118,6 +121,8 @@ KEEP_ALIVE_INTERVAL_SECONDS=600
 Then open `https://your-render-service.onrender.com/healthz`. It should show `"keep_alive":{"enabled":true,...}` and `"interval_seconds":600`.
 
 ATH shown in scans uses GeckoTerminal free OHLCV candles when a pool is available, then falls back to the highest cap the bot has tracked from that chat's call. Free APIs do not always expose a perfect lifetime ATH for every token, so the bot keeps refreshing call peaks in the background.
+
+Supply and top-holder concentration use Solana RPC when `ENABLE_SOLANA_RPC=true`. The default public RPC is free but rate-limited. For best reliability, set `SOLANA_RPC_URL` to a free RPC endpoint from a provider such as Helius, QuickNode, Alchemy, or Triton. Exact holder count requires the heavier `ENABLE_SOLANA_HOLDER_COUNT=true`, and should only be used with a good RPC because many public endpoints block or throttle that call.
 
 Smart Intel uses free data. Paid-trend impact improves after the bot has multiple snapshots for a token. Cluster checks use cautious wording and are not proof of wallet relationships. Explain-my-loss uses tracked calls/current market data unless a future wallet-history layer is added.
 
