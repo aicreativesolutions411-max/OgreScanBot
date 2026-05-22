@@ -23,16 +23,17 @@ class DexscreenerClient:
     async def scan_solana_token(self, token_address: str, strict_ticker: bool = True) -> TokenScan | None:
         query = str(token_address or "").strip()
         query_is_address = is_solana_address(query)
+        search_query = query if query_is_address else query.removeprefix("$")
         pairs = await self._token_pairs(query) if query_is_address else []
         pairs = [pair for pair in pairs if pair.get("chainId") == "solana"]
         if query_is_address and not pairs:
             pairs = await self._pair_by_address(query)
         if not pairs:
-            pairs = await self._search(query)
+            pairs = await self._search(search_query)
         pairs = [pair for pair in pairs if pair.get("chainId") == "solana"]
         if not pairs:
             return None
-        pair = _select_pair(pairs, query, query_is_address, strict_ticker=strict_ticker)
+        pair = _select_pair(pairs, search_query, query_is_address, strict_ticker=strict_ticker)
         if not pair and query_is_address:
             pair = _max_liquidity_pair(_pair_address_matches(pairs, query))
         if not pair:
@@ -145,7 +146,16 @@ def _select_pair(pairs: list[dict], query: str, query_is_address: bool, strict_t
             for pair in pairs
             if _token_address(pair.get("baseToken")) == query
         ]
-        return _max_liquidity_pair(matches)
+        if matches:
+            return _max_liquidity_pair(matches)
+        normalized_matches = [
+            pair
+            for pair in pairs
+            if str(_token_address(pair.get("baseToken")) or "").lower() == query.lower()
+        ]
+        if normalized_matches:
+            return _max_liquidity_pair(normalized_matches)
+        return None
 
     symbol = query.strip().upper().removeprefix("$")
     if not symbol:
@@ -220,29 +230,34 @@ def _ticker_pair_score(pair: dict) -> float:
     socials = info.get("socials") if isinstance(info.get("socials"), list) else []
     websites = info.get("websites") if isinstance(info.get("websites"), list) else []
     boosts = pair.get("boosts") if isinstance(pair.get("boosts"), dict) else {}
+    txns_h24 = (pair.get("txns") or {}).get("h24") or {}
+    buys_h24 = _float_or_none(txns_h24.get("buys")) or 0
+    sells_h24 = _float_or_none(txns_h24.get("sells")) or 0
 
     score = 0.0
-    score += math.log1p(max(market_cap, 0)) * 15
-    score += math.log1p(max(liquidity, 0)) * 20
-    score += math.log1p(max(volume, 0)) * 5
+    score += math.sqrt(max(market_cap, 0)) * 4.0
+    score += math.sqrt(max(liquidity, 0)) * 7.0
+    score += math.sqrt(max(volume, 0)) * 1.5
+    score += math.sqrt(max(buys_h24 + sells_h24, 0)) * 12.0
     if created_at > 0:
-        score += min(500.0, max(0.0, ((time.time() * 1000) - created_at) / 86_400_000) * 2)
+        age_days = max(0.0, ((time.time() * 1000) - created_at) / 86_400_000)
+        score += min(250.0, age_days * 1.5)
     if socials:
-        score += 350
+        score += 80
     if websites:
-        score += 200
+        score += 60
     if info.get("imageUrl") or info.get("header"):
-        score += 50
+        score += 25
     if _float_or_none(boosts.get("active")):
-        score += 50
+        score += 120
     if liquidity <= 0:
-        score -= 100_000
+        score -= 50_000
     elif liquidity < 1_000:
-        score -= 750
+        score -= 120
     if market_cap <= 0:
-        score -= 500
+        score -= 250
     if not socials and not websites:
-        score -= 1_000
+        score -= 50
     return score
 
 

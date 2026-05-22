@@ -38,6 +38,17 @@ class JupiterTokenClient:
         exact.sort(key=_jupiter_score, reverse=True)
         return _mint(exact[0])
 
+    async def token_by_mint(self, mint: str) -> dict | None:
+        mint = str(mint or "").strip()
+        if not is_solana_address(mint):
+            return None
+        candidates = await self.search(mint)
+        exact = [item for item in candidates if _mint(item) == mint]
+        if exact:
+            exact.sort(key=_jupiter_score, reverse=True)
+            return exact[0]
+        return candidates[0] if len(candidates) == 1 else None
+
     async def search(self, query: str) -> list[dict]:
         if not self.api_key:
             return []

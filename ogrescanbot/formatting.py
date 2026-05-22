@@ -352,6 +352,7 @@ def format_paid_trend(
         f"<code>{html.escape(token.address)}</code>\n\n"
         f"├ Label <b>{label}</b>\n"
         f"├ Boost detected <b>{dex_paid_bracket(token.dex_paid)}</b>\n"
+        f"├ First seen <b>{snapshot_age(first_snapshot)}</b>\n"
         f"├ Current MC <b>{money(token.cap_for_tracking)}</b>\n"
         f"├ Current Vol <b>{money(token.volume_h24)}</b>\n"
         f"└ Current LP <b>{money(token.liquidity_usd)}</b>\n\n"
@@ -695,11 +696,12 @@ def paid_before_after_lines(
     first_snapshot: TokenSnapshot | None,
     latest_snapshot: TokenSnapshot | None,
 ) -> str:
-    if not first_snapshot or not latest_snapshot or first_snapshot.id == latest_snapshot.id:
+    if not first_snapshot:
         return (
-            "└ No earlier snapshot yet. Scan or check this token again later to measure before/after boost impact."
+            "└ No stored baseline yet. I saved this check, so the next scan can compare old vs current."
         )
     lines = [
+        f"├ Baseline <b>{snapshot_age(first_snapshot)}</b>",
         f"├ MC {money(first_snapshot.market_cap)} → {money(token.cap_for_tracking)} ({delta_pct(first_snapshot.market_cap, token.cap_for_tracking)})",
         f"├ Vol {money(first_snapshot.volume_h24)} → {money(token.volume_h24)} ({delta_pct(first_snapshot.volume_h24, token.volume_h24)})",
         f"└ LP {money(first_snapshot.liquidity_usd)} → {money(token.liquidity_usd)} ({delta_pct(first_snapshot.liquidity_usd, token.liquidity_usd)})",
@@ -709,13 +711,20 @@ def paid_before_after_lines(
 
 def paid_worked_line(token: TokenScan, first_snapshot: TokenSnapshot | None) -> str:
     if not first_snapshot or not first_snapshot.market_cap or not token.cap_for_tracking:
-        return "Tracking starts once the bot has more than one snapshot."
+        return "Tracking starts once the bot has a saved baseline and current MC."
     move_pct = ((token.cap_for_tracking / first_snapshot.market_cap) - 1.0) * 100
     if move_pct >= 50:
         return f"Looks effective so far: MC is up {move_pct:.0f}% from the first snapshot."
     if move_pct > 0:
         return f"Mixed so far: MC is up {move_pct:.0f}%, but keep watching volume and LP."
     return f"Not working yet: MC is down {move_pct:.0f}% from the first snapshot."
+
+
+def snapshot_age(snapshot: TokenSnapshot | None) -> str:
+    if not snapshot:
+        return "not saved yet"
+    age = age_from_seconds(int(time.time()) - snapshot.created_at)
+    return f"{age} ago" if age else "just now"
 
 
 def cluster_signals(token: TokenScan, rug: RugSummary | None) -> list[str]:

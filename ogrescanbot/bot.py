@@ -43,7 +43,7 @@ from .formatting import (
 from .geckoterminal import GeckoTerminalClient
 from .images import build_pnl_card, build_scan_banner
 from .jupiter import JupiterTokenClient
-from .models import TokenScan
+from .models import TokenScan, normalize_media_url
 from .pumpfun import PumpFunClient
 from .rugcheck import RugCheckClient
 from .solana_rpc import SolanaRpcClient, merge_onchain_security
@@ -663,51 +663,72 @@ class OgreScanApp:
         return normalize_image_bytes(data)
 
     async def resolve_token(self, query: str, include_paid: bool = True, include_ath: bool = True):
-        original_query = query
-        query = await self.resolve_scan_query(query)
+        query = self.resolve_ticker_alias(query)
+        if is_solana_address(query):
+            return await self.resolve_address_token(query, include_paid=include_paid, include_ath=include_ath, allow_fallback=True)
+
         token = await self.dex.scan_solana_token(query)
+        if token:
+            return await self.finalize_resolved_token(token, include_paid=include_paid, include_ath=include_ath)
+
+        if self.jupiter:
+            mint = await self.jupiter.best_token_mint(query)
+            if mint:
+                token = await self.resolve_address_token(mint, include_paid=include_paid, include_ath=include_ath, allow_fallback=False)
+                if token:
+                    return token
+
+        if self.pump:
+            pump_mint = await self.pump.best_token_mint_by_ticker(query)
+            if pump_mint:
+                token = await self.resolve_address_token(
+                    pump_mint,
+                    include_paid=include_paid,
+                    include_ath=include_ath,
+                    allow_fallback=False,
+                )
+                if token:
+                    return token
+        return None
+
+    async def resolve_address_token(
+        self,
+        address: str,
+        include_paid: bool = True,
+        include_ath: bool = True,
+        allow_fallback: bool = True,
+    ):
+        token = await self.dex.scan_solana_token(address)
+        if token:
+            return await self.finalize_resolved_token(token, include_paid=include_paid, include_ath=include_ath)
+
+        if self.pump:
+            pump_token = await self.pump.scan_token(address)
+            if pump_token:
+                return await self.finalize_resolved_token(pump_token, include_paid=include_paid, include_ath=include_ath)
+
+        if self.jupiter:
+            jupiter_data = await self.jupiter.token_by_mint(address)
+            if jupiter_data:
+                token = jupiter_token_scan(address, jupiter_data)
+                return await self.finalize_resolved_token(token, include_paid=include_paid, include_ath=include_ath)
+
+        if allow_fallback:
+            fallback = fallback_token_scan(address)
+            return await self.finalize_resolved_token(fallback, include_paid=include_paid, include_ath=include_ath)
+        return None
+
+    async def finalize_resolved_token(self, token, include_paid: bool = True, include_ath: bool = True):
         if token and self.pump:
             token = token.with_pump_metadata(await self.pump.metadata(token.address))
-        if token:
-            if include_ath:
-                token = await self.enrich_market_data(token)
-            return await self.enrich_dex_paid(token) if include_paid else token
-        if self.pump and is_solana_address(query):
-            pump_token = await self.pump.scan_token(query)
-            if not pump_token:
-                return None
-            if include_ath:
-                pump_token = await self.enrich_market_data(pump_token)
-            return await self.enrich_dex_paid(pump_token) if include_paid else pump_token
-        if self.pump and not is_solana_address(query):
-            pump_mint = await self.pump.best_token_mint_by_ticker(original_query)
-            if pump_mint:
-                token = await self.dex.scan_solana_token(pump_mint)
-                if token:
-                    token = token.with_pump_metadata(await self.pump.metadata(token.address))
-                    if include_ath:
-                        token = await self.enrich_market_data(token)
-                    return await self.enrich_dex_paid(token) if include_paid else token
-                pump_token = await self.pump.scan_token(pump_mint)
-                if pump_token:
-                    if include_ath:
-                        pump_token = await self.enrich_market_data(pump_token)
-                    return await self.enrich_dex_paid(pump_token) if include_paid else pump_token
-        if is_solana_address(query):
-            fallback = fallback_token_scan(query)
-            if include_ath:
-                fallback = await self.enrich_market_data(fallback)
-            return await self.enrich_dex_paid(fallback) if include_paid else fallback
-        return None
+        if include_ath:
+            token = await self.enrich_market_data(token)
+        return await self.enrich_dex_paid(token) if include_paid else token
 
     async def resolve_scan_query(self, query: str) -> str:
         resolved = self.resolve_ticker_alias(query)
         if is_solana_address(resolved):
             return resolved
-        if self.jupiter:
-            mint = await self.jupiter.best_token_mint(resolved)
-            if mint:
-                return mint
         return resolved
 
     async def enrich_market_data(self, token):
@@ -1127,6 +1148,62 @@ def fallback_token_scan(address: str) -> TokenScan:
         raw_pair={"fallback": True},
         dex_paid=None,
     )
+
+
+def jupiter_token_scan(address: str, data: dict) -> TokenScan:
+    name = str(data.get("name") or "Unknown").strip() or "Unknown"
+    symbol = str(data.get("symbol") or "?").strip() or "?"
+    cap = first_float(data, "mcap", "marketCap", "market_cap", "fdv")
+    liquidity = first_float(data, "liquidity", "liquidityUsd", "liquidity_usd")
+    volume = first_float(data, "daily_volume", "volume24h", "volume_24h")
+    image = data.get("logoURI") or data.get("icon") or data.get("image")
+    socials = []
+    websites = []
+    if data.get("twitter"):
+        socials.append({"type": "twitter", "url": str(data.get("twitter"))})
+    if data.get("telegram"):
+        socials.append({"type": "telegram", "url": str(data.get("telegram"))})
+    if data.get("website"):
+        websites.append({"label": "Web", "url": str(data.get("website"))})
+    return TokenScan(
+        address=address,
+        name=name,
+        symbol=symbol,
+        chain_id="solana",
+        dex_id="jupiter",
+        pair_address="",
+        pair_url=f"https://dexscreener.com/solana/{address}",
+        price_usd=None,
+        market_cap=cap,
+        fdv=cap,
+        liquidity_usd=liquidity,
+        volume_h24=volume,
+        price_change_h1=None,
+        price_change_h24=None,
+        buys_h1=None,
+        sells_h1=None,
+        created_at_ms=None,
+        image_url=normalize_media_url(str(image).strip()) if image else None,
+        header_url=None,
+        description=str(data.get("description") or "").strip() or None,
+        socials=socials,
+        websites=websites,
+        raw_pair={"jupiter": data},
+        dex_paid=None,
+    )
+
+
+def first_float(data: dict, *keys: str) -> float | None:
+    for key in keys:
+        try:
+            value = data.get(key)
+            if value is not None:
+                parsed = float(value)
+                if parsed > 0:
+                    return parsed
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def strict_scan_rejection(token, rug, auto: bool = False) -> str | None:
