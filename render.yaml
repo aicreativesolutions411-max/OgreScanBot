@@ -37,7 +37,7 @@ services:
       - key: KEEP_ALIVE_INTERVAL_SECONDS
         value: 600
       - key: TICKER_ALIASES
-        value: OGRE=5RAZMWd9RiKfodLPQ73cFk4CMoJzTUsATUoRdDThpump
+        value: OGRE=5RAZMWd9RiKfodLPQ73cFk4CMoJzTUSATUoRdDThpump
       - key: BACKUP_CHAT_ID
         sync: false
       - key: BACKUP_INTERVAL_SECONDS

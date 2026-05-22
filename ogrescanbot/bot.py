@@ -19,7 +19,7 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 from aiohttp import ClientError, web
 from PIL import Image, UnidentifiedImageError
 
-from .config import Settings, load_settings
+from .config import OGRE_CA, OLD_BAD_OGRE_CA, Settings, load_settings
 from .db import Database, TraderRecord, period_to_since
 from .dexscreener import DexscreenerClient
 from .extract import extract_solana_addresses, extract_token_queries, extract_x_post_links, is_solana_address
@@ -673,6 +673,8 @@ class OgreScanApp:
 
     def resolve_ticker_alias(self, query: str) -> str:
         clean = str(query or "").strip()
+        if clean == OLD_BAD_OGRE_CA:
+            return OGRE_CA
         if is_solana_address(clean):
             return clean
         alias = self.settings.ticker_aliases.get(clean.upper().removeprefix("$"))

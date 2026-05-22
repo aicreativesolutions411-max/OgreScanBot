@@ -4,8 +4,11 @@ import os
 from dotenv import load_dotenv
 
 
+OGRE_CA = "5RAZMWd9RiKfodLPQ73cFk4CMoJzTUSATUoRdDThpump"
+OLD_BAD_OGRE_CA = "5RAZMWd9RiKfodLPQ73cFk4CMoJzTUsATUoRdDThpump"
+
 DEFAULT_TICKER_ALIASES = {
-    "OGRE": "5RAZMWd9RiKfodLPQ73cFk4CMoJzTUsATUoRdDThpump",
+    "OGRE": OGRE_CA,
 }
 
 
@@ -95,5 +98,7 @@ def parse_ticker_aliases(value: str) -> dict[str, str]:
         ticker = ticker.strip().upper().removeprefix("$")
         address = address.strip()
         if ticker and address:
+            if ticker == "OGRE" and address == OLD_BAD_OGRE_CA:
+                address = OGRE_CA
             aliases[ticker] = address
     return aliases

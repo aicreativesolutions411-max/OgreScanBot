@@ -129,7 +129,7 @@ Smart Intel uses free data. Paid-trend impact improves after the bot has multipl
 `TICKER_ALIASES` lets you force exact ticker matches before Dexscreener search. It defaults to:
 
 ```text
-OGRE=5RAZMWd9RiKfodLPQ73cFk4CMoJzTUsATUoRdDThpump
+OGRE=5RAZMWd9RiKfodLPQ73cFk4CMoJzTUSATUoRdDThpump
 ```
 
 Add more with commas, for example `OGRE=address,ABC=address2`.

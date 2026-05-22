@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import aiohttp
 
+from .extract import is_solana_address
 from .models import TokenScan, normalize_media_url
 
 
@@ -17,40 +18,51 @@ class DexscreenerClient:
         await self._session.close()
 
     async def scan_solana_token(self, token_address: str) -> TokenScan | None:
-        pairs = await self._token_pairs(token_address)
+        query = str(token_address or "").strip()
+        query_is_address = is_solana_address(query)
+        pairs = await self._token_pairs(query) if query_is_address else []
+        pairs = [pair for pair in pairs if pair.get("chainId") == "solana"]
+        if query_is_address and not pairs:
+            pairs = await self._pair_by_address(query)
         if not pairs:
-            pairs = await self._search(token_address)
+            pairs = await self._search(query)
         pairs = [pair for pair in pairs if pair.get("chainId") == "solana"]
         if not pairs:
             return None
-        pair = max(pairs, key=lambda item: float((item.get("liquidity") or {}).get("usd") or 0))
+        pair = _select_pair(pairs, query, query_is_address)
+        if not pair and query_is_address:
+            pair = _max_liquidity_pair(_pair_address_matches(pairs, query))
+        if not pair:
+            return None
         base = pair.get("baseToken") or {}
-        info = _merged_info(pair, pairs)
+        base_address = _string_or_none(base.get("address")) or query
+        related_pairs = _same_base_pairs(pairs, base_address) or [pair]
+        info = _merged_info(pair, related_pairs)
         txns_h1 = (pair.get("txns") or {}).get("h1") or {}
         price_change = pair.get("priceChange") or {}
         volume = pair.get("volume") or {}
         liquidity = pair.get("liquidity") or {}
-        market_cap = _float_or_none(pair.get("marketCap")) or _max_float_from_pairs(pairs, "marketCap")
-        fdv = _float_or_none(pair.get("fdv")) or _max_float_from_pairs(pairs, "fdv") or market_cap
+        market_cap = _float_or_none(pair.get("marketCap")) or _max_float_from_pairs(related_pairs, "marketCap")
+        fdv = _float_or_none(pair.get("fdv")) or _max_float_from_pairs(related_pairs, "fdv") or market_cap
 
         return TokenScan(
-            address=base.get("address") or token_address,
+            address=base_address,
             name=base.get("name") or "Unknown",
             symbol=base.get("symbol") or "?",
             chain_id=pair.get("chainId") or "solana",
             dex_id=pair.get("dexId") or "?",
             pair_address=pair.get("pairAddress") or "",
-            pair_url=pair.get("url") or f"https://dexscreener.com/solana/{token_address}",
-            price_usd=_float_or_none(pair.get("priceUsd")) or _first_float_from_pairs(pairs, "priceUsd"),
+            pair_url=pair.get("url") or f"https://dexscreener.com/solana/{base_address}",
+            price_usd=_float_or_none(pair.get("priceUsd")) or _first_float_from_pairs(related_pairs, "priceUsd"),
             market_cap=market_cap,
             fdv=fdv,
-            liquidity_usd=_float_or_none(liquidity.get("usd")) or _max_nested_float_from_pairs(pairs, "liquidity", "usd"),
-            volume_h24=_float_or_none(volume.get("h24")) or _max_nested_float_from_pairs(pairs, "volume", "h24"),
-            price_change_h1=_float_or_none(price_change.get("h1")) or _first_nested_float_from_pairs(pairs, "priceChange", "h1"),
-            price_change_h24=_float_or_none(price_change.get("h24")) or _first_nested_float_from_pairs(pairs, "priceChange", "h24"),
+            liquidity_usd=_float_or_none(liquidity.get("usd")) or _max_nested_float_from_pairs(related_pairs, "liquidity", "usd"),
+            volume_h24=_float_or_none(volume.get("h24")) or _max_nested_float_from_pairs(related_pairs, "volume", "h24"),
+            price_change_h1=_float_or_none(price_change.get("h1")) or _first_nested_float_from_pairs(related_pairs, "priceChange", "h1"),
+            price_change_h24=_float_or_none(price_change.get("h24")) or _first_nested_float_from_pairs(related_pairs, "priceChange", "h24"),
             buys_h1=_int_or_none(txns_h1.get("buys")),
             sells_h1=_int_or_none(txns_h1.get("sells")),
-            created_at_ms=_earliest_int_from_pairs(pairs, "pairCreatedAt") or _int_or_none(pair.get("pairCreatedAt")),
+            created_at_ms=_earliest_int_from_pairs(related_pairs, "pairCreatedAt") or _int_or_none(pair.get("pairCreatedAt")),
             image_url=normalize_media_url(_string_or_none(info.get("imageUrl"))),
             header_url=normalize_media_url(_string_or_none(info.get("header"))),
             description=_string_or_none(info.get("description")),
@@ -87,6 +99,15 @@ class DexscreenerClient:
             data = await response.json(content_type=None)
         return data if isinstance(data, list) else []
 
+    async def _pair_by_address(self, pair_address: str) -> list[dict]:
+        url = f"{DEX_API}/latest/dex/pairs/solana/{pair_address}"
+        async with self._session.get(url) as response:
+            if response.status >= 400:
+                return []
+            data = await response.json(content_type=None)
+        pairs = data.get("pairs") if isinstance(data, dict) else None
+        return pairs if isinstance(pairs, list) else []
+
     async def _search(self, query: str) -> list[dict]:
         url = f"{DEX_API}/latest/dex/search"
         async with self._session.get(url, params={"q": query}) as response:
@@ -112,6 +133,50 @@ def _int_or_none(value: object) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _select_pair(pairs: list[dict], query: str, query_is_address: bool) -> dict | None:
+    if query_is_address:
+        matches = [
+            pair
+            for pair in pairs
+            if _token_address(pair.get("baseToken")) == query
+        ]
+        return _max_liquidity_pair(matches)
+
+    symbol = query.strip().upper().removeprefix("$")
+    if not symbol:
+        return None
+    matches = [
+        pair
+        for pair in pairs
+        if str((pair.get("baseToken") or {}).get("symbol") or "").strip().upper() == symbol
+    ]
+    return _max_liquidity_pair(matches)
+
+
+def _same_base_pairs(pairs: list[dict], base_address: str) -> list[dict]:
+    return [pair for pair in pairs if _token_address(pair.get("baseToken")) == base_address]
+
+
+def _pair_address_matches(pairs: list[dict], pair_address: str) -> list[dict]:
+    return [
+        pair
+        for pair in pairs
+        if str(pair.get("pairAddress") or "").strip() == pair_address
+    ]
+
+
+def _max_liquidity_pair(pairs: list[dict]) -> dict | None:
+    if not pairs:
+        return None
+    return max(pairs, key=lambda item: float((item.get("liquidity") or {}).get("usd") or 0))
+
+
+def _token_address(token: object) -> str | None:
+    if not isinstance(token, dict):
+        return None
+    return _string_or_none(token.get("address"))
 
 
 def _positive(value: float | None) -> bool:
