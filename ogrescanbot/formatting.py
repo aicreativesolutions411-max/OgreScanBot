@@ -108,7 +108,7 @@ def format_scan_caption(
     ]
     stats.extend(
         [
-            f"├ P:    {pair_short_link(token)}",
+            f"├ P:    <code>{short_address(token.pair_address or token.address)}</code>",
             f"└ CA:   <code>{short_address(token.address)}</code>",
         ]
     )
@@ -128,8 +128,8 @@ def format_scan_caption(
         f"├ Called <b>{called_at}</b> | Now <b>{now}</b>\n"
         f"└ ATH from call <b>{best}</b> ({multiple_pct(call.peak_multiple if call else None)}) | "
         f"Current <b>{current}</b> ({multiple_pct(current_value)})\n\n"
-        f"{scan_tool_links(token)}\n"
-        f"{scan_x_links(token)}"
+        f"🔎 <b>Links</b>\n"
+        f"└ Use the buttons below for charts, audit, BubbleMaps, X, and trade tools."
         f"{powered_by_footer()}"
     )
 
@@ -147,7 +147,7 @@ def format_leaderboard(
         branch = tree[index - 1]
         medal = medals[index - 1]
         trader_rows.append(
-            f"{branch}{medal} <b>{html.escape(trader.caller_name)}</b> "
+            f"{branch}{medal} {telegram_user_link(trader.caller_user_id, trader.caller_name)} "
             f"[{trader.best_multiple:.1f} pts]"
         )
     trader_body = "\n".join(trader_rows) if trader_rows else "└ No callers tracked yet"
@@ -158,7 +158,7 @@ def format_leaderboard(
         marker = "💊" if index in {2, 7, 8, 9} else "🟪"
         call_rows.append(
             f"{prefix}{marker} {index} <b>{html.escape(call.token_symbol)}</b> » "
-            f"<i>{html.escape(call.caller_name)}</i> [<b>{call.peak_multiple:.1f}x</b>]"
+            f"{telegram_user_link(call.caller_user_id, call.caller_name)} [<b>{call.peak_multiple:.1f}x</b>]"
         )
     call_body = "\n".join(call_rows) if call_rows else "No calls tracked for this period yet."
     avg = float(stats.get("avg", 0))
@@ -174,6 +174,28 @@ def format_leaderboard(
         f"└Return   <b>{float(stats['return']):.1f}x</b> (<i>Avg: {avg:.1f}x</i>)\n\n"
         f"<blockquote>{call_body}</blockquote>\n\n"
         f"📚 <a href=\"{OGRE_WEBSITE_URL}\">Learn More!</a>"
+        f"{powered_by_footer()}"
+    )
+
+
+def format_status(settings, backup_chat_id: str, stats: dict[str, float | int] | None = None) -> str:
+    db_type = "Postgres" if settings.database_path.startswith(("postgres://", "postgresql://")) else "SQLite"
+    backup = "on" if backup_chat_id and db_type == "SQLite" else ("Postgres" if db_type == "Postgres" else "off")
+    keep_alive = "on" if settings.keep_alive_url and settings.keep_alive_interval_seconds > 0 else "off"
+    stats = stats or {"calls": 0, "return": 0, "hit_rate": 0}
+    return (
+        f"<b>{html.escape(settings.bot_name)} Status</b>\n\n"
+        f"├ DB        <b>{db_type}</b>\n"
+        f"├ Backup    <b>{html.escape(backup)}</b>\n"
+        f"├ Keepalive <b>{html.escape(keep_alive)}</b> ({settings.keep_alive_interval_seconds}s)\n"
+        f"├ Live calls <b>{settings.call_update_interval_seconds}s</b> / {settings.call_update_limit} calls\n"
+        f"├ RugCheck  <b>{on_off(settings.enable_rugcheck)}</b>\n"
+        f"├ Pump meta <b>{on_off(settings.enable_pump_metadata)}</b>\n"
+        f"└ Gecko ATH <b>{on_off(settings.enable_geckoterminal_ath)}</b>\n\n"
+        f"<b>This Chat</b>\n"
+        f"├ Calls    <b>{int(stats.get('calls', 0))}</b>\n"
+        f"├ Best     <b>{float(stats.get('return', 0)):.2f}x</b>\n"
+        f"└ Hit Rate <b>{int(stats.get('hit_rate', 0))}%</b>"
         f"{powered_by_footer()}"
     )
 
@@ -222,6 +244,8 @@ def format_help(bot_name: str) -> str:
         "|- /flex &lt;ca or $ticker&gt;\n"
         "|- /leaderboard\n"
         "|- /lb 1d | /lb 1w | /lb 2w | /lb 1m\n"
+        "|- lb | leaderboard\n"
+        "|- /status\n"
         "|- /backup"
         f"{powered_by_footer()}"
     )
@@ -307,10 +331,18 @@ def current_multiple(call: CallRecord | None) -> float | None:
 def caller_profile_link(call: CallRecord | None) -> str:
     if not call:
         return "unknown"
-    name = html.escape(call.caller_name)
-    if call.caller_user_id and call.caller_user_id > 0:
-        return f"<a href=\"tg://user?id={call.caller_user_id}\">{name}</a>"
-    return name
+    return telegram_user_link(call.caller_user_id, call.caller_name)
+
+
+def telegram_user_link(user_id: int | None, name: str | None) -> str:
+    clean = html.escape(name or "unknown")
+    if user_id and user_id > 0:
+        return f"<a href=\"tg://user?id={user_id}\">{clean}</a>"
+    return clean
+
+
+def on_off(value: bool) -> str:
+    return "on" if value else "off"
 
 
 def multiple_pct(value: float | None) -> str:
@@ -337,9 +369,9 @@ def security_status(token: TokenScan, rug: RugSummary | None) -> str:
 
 def audit_status(token: TokenScan, rug: RugSummary | None) -> str:
     return (
-        f"├ 🧾 DEX {dex_paid_link(token)}\n"
+        f"├ 🧾 DEX <b>{dex_paid_bracket(token.dex_paid)}</b>\n"
         f"├ 👥 Top 10 <b>[{rug_top_10_holders(rug)}]</b>\n"
-        f"├ 🧑‍💻 Dev Sold {dev_sold_link(rug)}\n"
+        f"├ 🧑‍💻 Dev Sold <b>{dev_sold_bracket(rug.dev_sold if rug else None)}</b>\n"
         f"└ 🔐 Mint <b>{authority_bracket(rug.mint_authority if rug else None, rug is not None)}</b> • "
         f"Freeze <b>{authority_bracket(rug.freeze_authority if rug else None, rug is not None)}</b>"
     )
@@ -494,11 +526,11 @@ def scan_social_links(token: TokenScan) -> str:
     website = first_website_url(token)
     x_url = social_url(token, {"twitter", "x"})
     if telegram:
-        links.append(f"<a href=\"{html.escape(telegram)}\">TG</a>")
+        links.append("TG")
     if website:
-        links.append(f"<a href=\"{html.escape(website)}\">Web</a>")
+        links.append("Web")
     if x_url:
-        links.append(f"<a href=\"{html.escape(x_url)}\">X</a>")
+        links.append("X")
     if token.description:
         links.append("About")
     return " • ".join(links) if links else "none found"

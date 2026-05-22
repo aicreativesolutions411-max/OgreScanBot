@@ -13,15 +13,17 @@ Solana-first Telegram scanner bot using free/public data sources.
 - Tracks each chat separately.
 - Builds leaderboards based on the biggest X return from a single call.
 - Leaderboards use a compact tree-and-quote layout for top callers, group stats, and best trades.
+- Leaderboard names link to the Telegram caller profile when Telegram gives the bot a user ID.
 - Generates matching call-based PNL/flex cards with `/pnl <ca>`, `/flex <ca>`, `pnl <ca>`, or `flex <ca>`.
 - PNL/flex cards use text over the image with no stat boxes, showing a big green call-to-ATH X or a big red loss.
 - Pulls token metadata images/descriptions from Dexscreener and falls back to Pump.fun public metadata when available.
 - Uses Dexscreener pair fallbacks plus Pump.fun cap metadata when Dex does not return market cap/FDV on the selected pair.
 - Shows DEX paid status and RugCheck dev-sold status when free endpoints return it.
-- Scan captions use compact icon sections for token stats, socials, audit, calls, X links, and trading tools.
+- Scan captions use compact icon sections for token stats, socials, audit, and calls, with link buttons for charts, audit, BubbleMaps, X, and trading tools.
 - Auto-scan only reads the new message text/caption, so replying to an old CA does not trigger a scan unless the reply itself includes a `$ticker` or CA.
 - Adds quick links for BubbleMaps, RugCheck, Pump.fun, GMGN, DEX, and X searches for high-engagement recent posts.
 - Auto-embeds X/Twitter post links and credits the Telegram user who shared the link.
+- `/status` shows backup, keep-alive, live refresh, and current chat tracking health.
 
 ## Free data sources
 
@@ -67,10 +69,13 @@ pnl <solana_ca>
 flex <solana_ca>
 /lb
 /leaderboard
+lb
+leaderboard
 /lb 1d
 /lb 1w
 /lb 2w
 /lb 1m
+/status
 /backup
 /help
 ```
@@ -98,7 +103,7 @@ KEEP_ALIVE_INTERVAL_SECONDS=600
 
 Then open `https://your-render-service.onrender.com/healthz`. It should show `"keep_alive":{"enabled":true,...}` and `"interval_seconds":600`.
 
-ATH shown in scans is the highest cap the bot has tracked from that chat's call. Dexscreener's free API does not always provide lifetime token ATH, so the bot uses live refreshes to keep the call peak updated.
+ATH shown in scans uses GeckoTerminal free OHLCV candles when a pool is available, then falls back to the highest cap the bot has tracked from that chat's call. Free APIs do not always expose a perfect lifetime ATH for every token, so the bot keeps refreshing call peaks in the background.
 
 `TICKER_ALIASES` lets you force exact ticker matches before Dexscreener search. It defaults to:
 

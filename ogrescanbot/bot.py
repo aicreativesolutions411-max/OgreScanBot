@@ -7,9 +7,11 @@ import logging
 from io import BytesIO
 from pathlib import Path
 import time
+from urllib.parse import quote_plus
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import BufferedInputFile, CallbackQuery, ChatMemberUpdated, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram.client.default import DefaultBotProperties
@@ -27,6 +29,7 @@ from .formatting import (
     format_leaderboard_backup_snapshot,
     format_scan,
     format_scan_caption,
+    format_status,
     format_x_post_embed,
     powered_by_footer,
     user_display_name,
@@ -143,7 +146,10 @@ class OgreScanApp:
         self.dp.message.register(self.pnl_command, Command("pnl", "flex"))
         self.dp.message.register(self.pnl_command, lambda message: is_plain_card_command(message.text or ""))
         self.dp.message.register(self.leaderboard_command, Command("lb", "leaderboard"))
+        self.dp.message.register(self.leaderboard_command, lambda message: is_plain_leaderboard_command(message.text or ""))
         self.dp.callback_query.register(self.leaderboard_period_callback, F.data.startswith("lb:"))
+        self.dp.message.register(self.status_command, Command("status"))
+        self.dp.message.register(self.status_command, lambda message: is_plain_status_command(message.text or ""))
         self.dp.message.register(self.backup_command, Command("backup"))
         self.dp.message.register(self.auto_scan_message, F.text)
         self.dp.channel_post.register(self.channel_post_text_handler, F.text)
@@ -226,6 +232,13 @@ class OgreScanApp:
         period, text, markup = await self.build_leaderboard_message(message.chat.id, args[0] if args else "1d")
         await message.reply(text, reply_markup=markup, disable_web_page_preview=True)
 
+    async def status_command(self, message: Message) -> None:
+        stats = await self.db.stats(message.chat.id, None, self.settings.min_multiple_for_hit)
+        await message.reply(
+            format_status(self.settings, self.backup_chat_id(), stats),
+            disable_web_page_preview=True,
+        )
+
     async def leaderboard_period_callback(self, callback: CallbackQuery) -> None:
         if not callback.message or not callback.data:
             await callback.answer()
@@ -235,6 +248,12 @@ class OgreScanApp:
         try:
             await callback.message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
             await callback.answer()
+        except TelegramBadRequest as exc:
+            if "message is not modified" in str(exc).lower():
+                await callback.answer()
+                return
+            logging.exception("Leaderboard period update failed.")
+            await callback.answer("Could not update leaderboard right now.", show_alert=False)
         except Exception:
             logging.exception("Leaderboard period update failed.")
             await callback.answer("Could not update leaderboard right now.", show_alert=False)
@@ -317,18 +336,19 @@ class OgreScanApp:
             call, is_new_call = None, False
 
         rug = await self.rug.summary(token.address) if self.rug else None
-        scan_text = format_scan_caption(token, call, is_new_call, rug)
+        scan_text = photo_caption(format_scan_caption(token, call, is_new_call, rug), limit=1000)
         banner = await self.build_scan_photo(token)
+        links = scan_links_keyboard(token, rug)
         try:
-            await message.reply_photo(banner, caption=scan_text)
+            await message.reply_photo(banner, caption=scan_text, reply_markup=links)
         except Exception:
             logging.exception("Full scan photo send failed; retrying with safe caption.")
             safe_caption = safe_scan_caption(token, call)
             try:
-                await message.reply_photo(banner, caption=safe_caption, parse_mode=None)
+                await message.reply_photo(banner, caption=safe_caption, parse_mode=None, reply_markup=links)
             except Exception:
                 logging.exception("Safe scan photo send failed; falling back to text reply.")
-                await message.reply(safe_caption, parse_mode=None, disable_web_page_preview=True)
+                await message.reply(safe_caption, parse_mode=None, reply_markup=links, disable_web_page_preview=True)
 
     async def build_scan_photo(self, token) -> BufferedInputFile:
         source = None
@@ -672,6 +692,20 @@ def is_plain_card_command(text: str) -> bool:
     return command_name(stripped) in {"pnl", "flex"}
 
 
+def is_plain_leaderboard_command(text: str) -> bool:
+    stripped = (text or "").strip()
+    if not stripped or stripped.startswith("/"):
+        return False
+    return command_name(stripped) in {"lb", "leaderboard"}
+
+
+def is_plain_status_command(text: str) -> bool:
+    stripped = (text or "").strip()
+    if not stripped or stripped.startswith("/"):
+        return False
+    return command_name(stripped) == "status"
+
+
 def first_token_query_from_message(message: Message, include_reply: bool = False) -> str | None:
     sources = [message.text, message.caption]
     reply = getattr(message, "reply_to_message", None)
@@ -694,6 +728,105 @@ def leaderboard_keyboard(active_period: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[buttons])
 
 
+def scan_links_keyboard(token, rug=None) -> InlineKeyboardMarkup:
+    address = token.address
+    pair = token.pair_address or token.address
+    rows: list[list[InlineKeyboardButton]] = []
+    add_button_row(
+        rows,
+        [
+            ("DEX", token.pair_url or f"https://dexscreener.com/solana/{address}"),
+            ("Rug", f"https://rugcheck.xyz/tokens/{address}"),
+            ("Bubble", f"https://app.bubblemaps.io/sol/token/{address}"),
+        ],
+    )
+    add_button_row(
+        rows,
+        [
+            ("Solscan", f"https://solscan.io/token/{address}"),
+            ("Pump", f"https://pump.fun/{address}"),
+            ("GMGN", f"https://gmgn.ai/sol/token/{address}"),
+        ],
+    )
+    add_button_row(
+        rows,
+        [
+            ("GT", f"https://www.geckoterminal.com/solana/pools/{pair}"),
+            ("Birdeye", f"https://birdeye.so/token/{address}?chain=solana"),
+            ("Dextools", f"https://www.dextools.io/app/en/solana/pair-explorer/{pair}"),
+        ],
+    )
+
+    terms = [address]
+    if token.symbol and token.symbol != "?":
+        terms.append(f"${token.symbol}")
+    query = " OR ".join(terms)
+    add_button_row(
+        rows,
+        [
+            ("Recent X", f"https://x.com/search?q={quote_plus(query)}&src=typed_query&f=live"),
+            ("Big Xs", f"https://x.com/search?q={quote_plus(query + ' min_faves:25')}&src=typed_query&f=top"),
+        ],
+    )
+
+    add_button_row(
+        rows,
+        [
+            ("DEX Paid", token.pair_url or f"https://dexscreener.com/solana/{address}"),
+            ("Dev Wallet", dev_wallet_url(rug)),
+        ],
+    )
+    add_button_row(
+        rows,
+        [
+            ("TG", first_token_social(token, {"telegram", "tg"})),
+            ("Web", first_token_website(token)),
+            ("X", first_token_social(token, {"twitter", "x"})),
+        ],
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def dev_wallet_url(rug) -> str | None:
+    wallet = getattr(rug, "dev_wallet", None) if rug else None
+    if not wallet:
+        return None
+    return f"https://solscan.io/account/{wallet}"
+
+
+def add_button_row(rows: list[list[InlineKeyboardButton]], items: list[tuple[str, str | None]]) -> None:
+    buttons = [
+        InlineKeyboardButton(text=label, url=url)
+        for label, url in items
+        if url and str(url).startswith(("http://", "https://"))
+    ]
+    if buttons:
+        rows.append(buttons)
+
+
+def first_token_social(token, labels: set[str]) -> str | None:
+    for social in token.socials:
+        url = str(social.get("url") or "").strip()
+        label = str(social.get("type") or "").strip().lower()
+        if not url:
+            continue
+        if label in labels:
+            return url
+        if "telegram" in labels and ("t.me/" in url or "telegram." in url):
+            return url
+        if labels & {"twitter", "x"} and ("twitter.com" in url or "x.com" in url):
+            return url
+    return None
+
+
+def first_token_website(token) -> str | None:
+    for site in token.websites:
+        url = str(site.get("url") or "").strip()
+        if url:
+            return url
+    return None
+
+
 def is_backup_command(text: str) -> bool:
     command = text.strip().split(maxsplit=1)[0].lower()
     return command in {
@@ -710,7 +843,12 @@ def photo_caption(text: str, limit: int = 850) -> str:
     footer = text[footer_start - 2 :] if footer_start > 0 else ""
     body = text[: footer_start - 2] if footer_start > 0 else text
 
-    removable_sections = ["🔎 <b>X Posts</b>", "🧾 <b>Info</b>"]
+    removable_sections = [
+        "🔎 <b>Links</b>",
+        "🔗 <b>Socials</b>",
+        "🔎 <b>X Posts</b>",
+        "🧾 <b>Info</b>",
+    ]
     for section in removable_sections:
         body = remove_section(body, section)
         candidate = f"{body.rstrip()}{footer}"
