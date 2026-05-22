@@ -22,7 +22,7 @@ from PIL import Image, UnidentifiedImageError
 from .config import OGRE_CA, OLD_BAD_OGRE_CA, Settings, load_settings
 from .db import Database, TraderRecord, period_to_since
 from .dexscreener import DexscreenerClient
-from .extract import extract_solana_addresses, extract_token_queries, extract_x_post_links, is_solana_address
+from .extract import extract_ca_like_values, extract_solana_addresses, extract_token_queries, extract_x_post_links, is_solana_address
 from .formatting import (
     format_help,
     format_leaderboard,
@@ -609,8 +609,17 @@ class OgreScanApp:
         await message.bot.send_chat_action(message.chat.id, "typing")
         token = await self.resolve_token(query)
         if not token:
-            await message.reply("I could not find that Solana token on Dexscreener or Pump.fun yet.")
-            return
+            fallback_address = first_ca_like_from_message(message) or ca_like_query(query)
+            if fallback_address:
+                logging.info("Using CA fallback scan for unresolved query %s", fallback_address)
+                token = await self.finalize_resolved_token(
+                    fallback_token_scan(fallback_address),
+                    include_paid=True,
+                    include_ath=True,
+                )
+            else:
+                await message.reply("I could not find that Solana token on Dexscreener or Pump.fun yet.")
+                return
 
         rug = await self.rug.summary(token.address) if self.rug else None
         rug = await self.enrich_security_data(token, rug)
@@ -698,17 +707,29 @@ class OgreScanApp:
         include_ath: bool = True,
         allow_fallback: bool = True,
     ):
-        token = await self.dex.scan_solana_token(address)
+        try:
+            token = await self.dex.scan_solana_token(address)
+        except Exception:
+            logging.exception("Dexscreener CA lookup failed for %s", address)
+            token = None
         if token:
             return await self.finalize_resolved_token(token, include_paid=include_paid, include_ath=include_ath)
 
         if self.pump:
-            pump_token = await self.pump.scan_token(address)
+            try:
+                pump_token = await self.pump.scan_token(address)
+            except Exception:
+                logging.exception("Pump.fun CA lookup failed for %s", address)
+                pump_token = None
             if pump_token:
                 return await self.finalize_resolved_token(pump_token, include_paid=include_paid, include_ath=include_ath)
 
         if self.jupiter:
-            jupiter_data = await self.jupiter.token_by_mint(address)
+            try:
+                jupiter_data = await self.jupiter.token_by_mint(address)
+            except Exception:
+                logging.exception("Jupiter CA lookup failed for %s", address)
+                jupiter_data = None
             if jupiter_data:
                 token = jupiter_token_scan(address, jupiter_data)
                 return await self.finalize_resolved_token(token, include_paid=include_paid, include_ath=include_ath)
@@ -720,7 +741,10 @@ class OgreScanApp:
 
     async def finalize_resolved_token(self, token, include_paid: bool = True, include_ath: bool = True):
         if token and self.pump:
-            token = token.with_pump_metadata(await self.pump.metadata(token.address))
+            try:
+                token = token.with_pump_metadata(await self.pump.metadata(token.address))
+            except Exception:
+                logging.exception("Pump metadata enrichment failed for %s", token.address)
         if include_ath:
             token = await self.enrich_market_data(token)
         return await self.enrich_dex_paid(token) if include_paid else token
@@ -733,13 +757,23 @@ class OgreScanApp:
 
     async def enrich_market_data(self, token):
         if self.gecko:
-            token = await self.gecko.enrich_ath(token)
+            try:
+                token = await self.gecko.enrich_ath(token)
+            except Exception:
+                logging.exception("GeckoTerminal enrichment failed for %s", token.address)
         if self.solana:
-            token = await self.solana.enrich_token_supply(token)
+            try:
+                token = await self.solana.enrich_token_supply(token)
+            except Exception:
+                logging.exception("Solana RPC supply enrichment failed for %s", token.address)
         return token
 
     async def enrich_dex_paid(self, token):
-        paid = await self.dex.token_orders_paid(token.chain_id or "solana", token.address)
+        try:
+            paid = await self.dex.token_orders_paid(token.chain_id or "solana", token.address)
+        except Exception:
+            logging.exception("Dex paid enrichment failed for %s", token.address)
+            return token
         if paid is None:
             return token
         return replace(token, dex_paid=bool(token.dex_paid or paid))
@@ -1239,7 +1273,23 @@ def first_token_query_from_message(message: Message, include_reply: bool = False
         queries = extract_token_queries(source or "")
         if queries:
             return queries[0]
+        ca_values = extract_ca_like_values(source or "")
+        if ca_values:
+            return ca_values[0]
     return None
+
+
+def first_ca_like_from_message(message: Message) -> str | None:
+    for source in (message.text, message.caption):
+        ca_values = extract_ca_like_values(source or "")
+        if ca_values:
+            return ca_values[0]
+    return None
+
+
+def ca_like_query(query: str | None) -> str | None:
+    ca_values = extract_ca_like_values(query or "")
+    return ca_values[0] if ca_values else None
 
 
 def intel_query_from_message(
@@ -1562,6 +1612,9 @@ def safe_scan_caption(token, call) -> str:
         f"ATH: {plain_money(peak)} ({best:.2f}x from call)" if best else (
             f"ATH: {plain_money(token.cap_for_tracking)} (current)" if token.cap_for_tracking else "ATH: n/a"
         ),
+        "",
+        f"CA: https://solscan.io/token/{token.address}",
+        f"DEX: {token.pair_url or f'https://dexscreener.com/solana/{token.address}'}",
         "",
         f"Caller: {caller}",
         f"Called at: {plain_money(cap)}",

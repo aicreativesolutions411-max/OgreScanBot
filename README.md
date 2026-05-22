@@ -30,6 +30,7 @@ Solana-first Telegram scanner bot using free/public data sources.
 - Auto-scan only reads the new message text/caption, so replying to an old CA does not trigger a scan unless the reply itself includes a `$ticker` or CA.
 - Valid Solana CAs always post. If Dexscreener/Pump.fun have not indexed the mint yet, the bot sends a fallback scan with the CA, links, and audit buttons instead of going silent.
 - `$ticker` scans prefer Dexscreener's best exact-symbol Solana market by MC, liquidity, volume, transactions, boosts, and age. Safety signals are used to demote obvious duplicate junk, not to hide valid low-MC/new pairs.
+- `TICKER_ALIASES` is optional and blank by default. Only set it when you intentionally want one ticker to force one mint instead of using market-first ranking.
 - Adds quick links for BubbleMaps, RugCheck, Pump.fun, GMGN, DEX, and X searches for high-engagement recent posts.
 - Adds SafeScan ranking/warnings with `/safescan on`. Found CA/$ticker scans still post, including low-MC Pump coins; SafeScan only helps rank duplicate tickers and keeps risks visible in the scan/audit.
 - Auto-embeds X/Twitter post links and credits the Telegram user who shared the link.

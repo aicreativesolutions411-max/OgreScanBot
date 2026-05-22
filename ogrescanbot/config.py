@@ -7,9 +7,7 @@ from dotenv import load_dotenv
 OGRE_CA = "5RAZMWd9RiKfodLPQ73cFk4CMoJzTUSATUoRdDThpump"
 OLD_BAD_OGRE_CA = "5RAZMWd9RiKfodLPQ73cFk4CMoJzTUsATUoRdDThpump"
 
-DEFAULT_TICKER_ALIASES = {
-    "OGRE": OGRE_CA,
-}
+DEFAULT_TICKER_ALIASES = {}
 
 
 @dataclass(frozen=True)

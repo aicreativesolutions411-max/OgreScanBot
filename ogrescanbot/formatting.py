@@ -39,6 +39,7 @@ def format_x_post_embed(username: str, embed_url: str, user) -> str:
 def format_scan(token: TokenScan, call: CallRecord | None, is_new_call: bool, rug: RugSummary | None) -> str:
     ca = html.escape(token.address)
     title = html.escape(f"{token.name} (${token.symbol})")
+    quick_links = scan_quick_links(token)
     call_line = ""
     if call:
         status = "New first call" if is_new_call else "First called"
@@ -59,7 +60,8 @@ def format_scan(token: TokenScan, call: CallRecord | None, is_new_call: bool, ru
     return (
         f"<b>OgreScanBot</b>\n"
         f"💊 <b>{title}</b>\n"
-        f"<code>{ca}</code>\n"
+        f"{ca_click_link(token, full=True)}\n"
+        f"├ {quick_links}\n"
         f"└ #SOL | {html.escape(token.dex_id)} | {age_from_ms(token.created_at_ms)}\n\n"
         f"{meta_text}"
         f"📊 <b>Stats</b>\n"
@@ -96,6 +98,7 @@ def format_scan_caption(
     current_value = current_multiple(call)
     current = f"{current_value:.2f}x" if current_value is not None else "n/a"
     ath = token_ath_value(token, call)
+    quick_links = scan_quick_links(token)
     call_section = (
         f"🧌 <b>Call</b>\n"
         f"├ {html.escape(status)} by {caller}\n"
@@ -120,15 +123,16 @@ def format_scan_caption(
     ]
     stats.extend(
         [
-            f"├ P:    <code>{short_address(token.pair_address or token.address)}</code>",
-            f"└ CA:   <code>{short_address(token.address)}</code>",
+            f"├ P:    {pair_click_link(token)}",
+            f"└ CA:   {ca_click_link(token)}",
         ]
     )
 
     return (
         f"<b>OgreScanBot</b>\n"
         f"🧬 <b>{html.escape(token.name)} (${html.escape(token.symbol)})</b>\n"
-        f"<code>{html.escape(token.address)}</code>\n"
+        f"{ca_click_link(token, full=True)}\n"
+        f"├ {quick_links}\n"
         f"└ 🌱 #SOL • {html.escape(token.dex_id)} • {age_from_ms(token.created_at_ms)}\n\n"
         f"{chr(10).join(stats)}\n\n"
         f"🔗 <b>Socials</b>\n"
@@ -1092,10 +1096,33 @@ def official_x_link(token: TokenScan) -> str | None:
     return None
 
 
+def ca_click_link(token: TokenScan, full: bool = False) -> str:
+    address = html.escape(token.address)
+    label = address if full else short_address(token.address)
+    return f"<a href=\"https://solscan.io/token/{address}\">{label}</a>"
+
+
+def pair_click_link(token: TokenScan) -> str:
+    label = short_address(token.pair_address or token.address)
+    return f"<a href=\"{dexscreener_url(token)}\">{label}</a>"
+
+
+def dex_click_link(token: TokenScan, label: str = "Dexscreener") -> str:
+    return f"<a href=\"{dexscreener_url(token)}\">{html.escape(label)}</a>"
+
+
+def dexscreener_url(token: TokenScan) -> str:
+    return html.escape(token.pair_url or f"https://dexscreener.com/solana/{token.address}")
+
+
+def scan_quick_links(token: TokenScan) -> str:
+    return f"CA {ca_click_link(token)} • DEX {dex_click_link(token)}"
+
+
 def tool_links(token: TokenScan) -> str:
     address = html.escape(token.address)
     links = [
-        f"<a href=\"{html.escape(token.pair_url)}\">DEX</a>",
+        f"<a href=\"{dexscreener_url(token)}\">DEX</a>",
         f"<a href=\"https://rugcheck.xyz/tokens/{address}\">RUG</a>",
         f"<a href=\"https://app.bubblemaps.io/sol/token/{address}\">BUB</a>",
         f"<a href=\"https://solscan.io/token/{address}\">SOL</a>",
@@ -1109,7 +1136,7 @@ def tool_links(token: TokenScan) -> str:
 def scan_tool_links(token: TokenScan) -> str:
     address = html.escape(token.address)
     pair = html.escape(token.pair_address or token.address)
-    dex_url = html.escape(token.pair_url)
+    dex_url = dexscreener_url(token)
     dextools = f"https://www.dextools.io/app/en/solana/pair-explorer/{pair}"
     gecko = f"https://www.geckoterminal.com/solana/pools/{pair}"
     mobula = f"https://mobula.io/asset/{address}"

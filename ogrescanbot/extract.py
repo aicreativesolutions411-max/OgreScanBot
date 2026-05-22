@@ -5,6 +5,7 @@ from urllib.parse import unquote, urlparse
 
 
 SOLANA_ADDRESS_RE = re.compile(r"(?<![A-Za-z0-9])[1-9A-HJ-NP-Za-km-z]{32,44}(?![A-Za-z0-9])")
+CA_LIKE_RE = re.compile(r"(?<![A-Za-z0-9])[A-Za-z0-9]{32,48}(?![A-Za-z0-9])")
 TICKER_RE = re.compile(r"(?<![A-Za-z0-9_])\$([A-Za-z][A-Za-z0-9_]{1,20})(?![A-Za-z0-9_])")
 X_STATUS_RE = re.compile(
     r"https?://(?:www\.|mobile\.)?(?:x\.com|twitter\.com)/([^/\s?]+)/status(?:es)?/(\d+)[^\s]*",
@@ -17,7 +18,7 @@ def extract_solana_addresses(text: str | None) -> list[str]:
         return []
 
     candidates: list[str] = []
-    normalized = unquote(text)
+    normalized = normalize_token_text(unquote(text))
 
     for match in SOLANA_ADDRESS_RE.findall(normalized):
         candidates.append(match)
@@ -39,11 +40,34 @@ def extract_solana_addresses(text: str | None) -> list[str]:
     return unique
 
 
+def extract_ca_like_values(text: str | None) -> list[str]:
+    if not text:
+        return []
+    normalized = normalize_token_text(unquote(text))
+    candidates: list[str] = []
+    for match in CA_LIKE_RE.findall(normalized):
+        candidates.append(match)
+    for raw in re.findall(r"https?://\S+", normalized):
+        parsed = urlparse(raw.rstrip(").,]}>"))
+        parts = [part for part in parsed.path.split("/") if part]
+        query = parsed.query.replace("=", " ").replace("&", " ")
+        combined = " ".join(parts + [query])
+        for match in CA_LIKE_RE.findall(combined):
+            candidates.append(match)
+    seen: set[str] = set()
+    unique: list[str] = []
+    for candidate in candidates:
+        if candidate not in seen:
+            unique.append(candidate)
+            seen.add(candidate)
+    return unique
+
+
 def extract_ticker_queries(text: str | None) -> list[str]:
     if not text:
         return []
 
-    candidates = [match.upper() for match in TICKER_RE.findall(unquote(text))]
+    candidates = [match.upper() for match in TICKER_RE.findall(normalize_token_text(unquote(text)))]
     seen: set[str] = set()
     unique: list[str] = []
     for candidate in candidates:
@@ -58,7 +82,20 @@ def extract_token_queries(text: str | None) -> list[str]:
 
 
 def is_solana_address(value: str | None) -> bool:
-    return bool(value and SOLANA_ADDRESS_RE.fullmatch(value.strip()))
+    return bool(value and SOLANA_ADDRESS_RE.fullmatch(normalize_token_text(value).strip()))
+
+
+def normalize_token_text(text: str | None) -> str:
+    if not text:
+        return ""
+    return (
+        str(text)
+        .replace("\u200b", "")
+        .replace("\u200c", "")
+        .replace("\u200d", "")
+        .replace("\ufeff", "")
+        .replace("\u2060", "")
+    )
 
 
 def extract_x_post_links(text: str | None) -> list[tuple[str, str, str]]:
