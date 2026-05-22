@@ -401,7 +401,7 @@ class OgreScanApp:
         key = strict_filter_setting_key(message.chat.id)
         if args and args[0] in {"on", "true", "strict", "enable", "enabled"}:
             await self.db.set_setting(key, "on")
-            await message.reply("SafeScan is on. I will skip zero-liquidity, no-social tiny/new tokens, and obvious freeze-risk scans in this chat.")
+            await message.reply("SafeScan is on for manual /scan checks. Auto CA/$ticker posts will still post the best match and show warnings instead of going silent.")
             return
         if args and args[0] in {"off", "false", "loose", "disable", "disabled"}:
             await self.db.set_setting(key, "off")
@@ -410,8 +410,8 @@ class OgreScanApp:
         enabled = await self.strict_filter_enabled(message.chat.id)
         await message.reply(
             f"SafeScan is {'on' if enabled else 'off'}.\n\n"
-            "Use /safescan on to skip honeypot-looking tokens, zero liquidity, missing market data, and no-social tiny/new copies.\n"
-            "Use /safescan off if your group wants every scan attempt posted."
+            "Auto CA/$ticker posts always show the best match the bot can find.\n"
+            "Use /safescan on to make manual /scan block obvious junk, or /safescan off to make manual scans loose too."
         )
 
     async def status_command(self, message: Message) -> None:
@@ -616,13 +616,15 @@ class OgreScanApp:
         rug = await self.enrich_security_data(token, rug)
         rejection = strict_scan_rejection(token, rug, auto=auto)
         if rejection and await self.strict_filter_enabled(message.chat.id):
-            logging.info("SafeScan skipped %s: %s", token.address, rejection)
-            if not auto:
+            if auto:
+                logging.info("SafeScan warning for auto scan %s: %s", token.address, rejection)
+            else:
+                logging.info("SafeScan skipped manual scan %s: %s", token.address, rejection)
                 await message.reply(
                     f"SafeScan blocked this scan: {html.escape(rejection)}\n\n"
-                    "Use /safescan off in this chat if you want loose scanning."
+                    "Auto CA/$ticker posts still show the best match. Use /safescan off in this chat if you want loose manual scans too."
                 )
-            return
+                return
 
         user = message.from_user
         caller_id = user.id if user else 0
@@ -1096,20 +1098,10 @@ def strict_scan_rejection(token, rug, auto: bool = False) -> str | None:
         return "missing core market data"
     if rug and getattr(rug, "freeze_authority", None):
         return "freeze authority appears active"
-    if not has_metadata and liquidity < 500:
+    if not has_metadata and liquidity < 250:
         return "near-zero liquidity with no metadata/socials"
-    if auto and not has_metadata and liquidity < 2_000 and (cap < 250_000 or token_is_new(token)):
-        return "no metadata/socials on a tiny low-liquidity token"
-    if auto and rug and rug.mint_authority and not has_metadata and liquidity < 10_000:
-        return "mint authority active with no metadata/socials"
-    if rug and rug.dev_sold is True and not has_metadata and liquidity < 10_000:
-        return "dev sold with no metadata/socials"
-    if rug and rug.risk_count is not None and rug.risk_count >= 6 and not has_metadata and liquidity < 10_000:
-        return "too many risk flags with no metadata/socials"
-    if rug and rug.risk_count is not None and rug.risk_count >= 9 and liquidity < 10_000:
-        return "extreme risk flags on a low-liquidity token"
-    if rug and rug.top_10_holder_pct is not None and rug.top_10_holder_pct >= 85 and liquidity < 10_000 and not has_metadata:
-        return "extreme holder concentration with no metadata/socials"
+    if auto and not has_metadata and liquidity < 1_000 and cap < 50_000 and token_is_new(token):
+        return "near-empty new token with no metadata/socials"
     return None
 
 

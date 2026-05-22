@@ -29,7 +29,7 @@ Solana-first Telegram scanner bot using free/public data sources.
 - Scan captions use compact icon sections for token stats, socials, audit, and calls, with categorized button menus for Smart Intel, charts, X links, security, socials, and trade tools. The trade menu includes OgreTradeBot.
 - Auto-scan only reads the new message text/caption, so replying to an old CA does not trigger a scan unless the reply itself includes a `$ticker` or CA.
 - Adds quick links for BubbleMaps, RugCheck, Pump.fun, GMGN, DEX, and X searches for high-engagement recent posts.
-- Adds SafeScan filtering with `/safescan on` so groups can skip obvious honeypot/copy behavior. Low liquidity alone is allowed for fresh launches; blocking focuses on zero liquidity, missing market data, active freeze authority, no metadata/socials plus tiny liquidity, dev-sold/no-metadata combinations, extreme risk counts, and extreme holder concentration with no metadata.
+- Adds SafeScan filtering with `/safescan on` for manual `/scan` checks. Auto CA/$ticker posts still show the best match instead of going silent; risks stay visible in the scan/audit.
 - Auto-embeds X/Twitter post links and credits the Telegram user who shared the link.
 - `/status` shows backup, keep-alive, live refresh, and current chat tracking health.
 
