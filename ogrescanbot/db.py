@@ -37,6 +37,20 @@ class TraderRecord:
     hits: int
 
 
+@dataclass(frozen=True)
+class TokenSnapshot:
+    id: int
+    chat_id: int
+    token_address: str
+    token_symbol: str
+    market_cap: float | None
+    liquidity_usd: float | None
+    volume_h24: float | None
+    holder_count: int | None
+    dex_paid: bool | None
+    created_at: int
+
+
 class Database:
     def __init__(self, path: str) -> None:
         self.path = path
@@ -74,6 +88,20 @@ class Database:
                         key TEXT PRIMARY KEY,
                         value TEXT NOT NULL
                     );
+                    CREATE TABLE IF NOT EXISTS token_snapshots (
+                        id BIGSERIAL PRIMARY KEY,
+                        chat_id BIGINT NOT NULL,
+                        token_address TEXT NOT NULL,
+                        token_symbol TEXT NOT NULL,
+                        market_cap DOUBLE PRECISION,
+                        liquidity_usd DOUBLE PRECISION,
+                        volume_h24 DOUBLE PRECISION,
+                        holder_count BIGINT,
+                        dex_paid BOOLEAN,
+                        created_at BIGINT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_token_snapshots_chat_token_created
+                    ON token_snapshots(chat_id, token_address, created_at);
                     """
                 )
             return
@@ -106,6 +134,20 @@ class Database:
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS token_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                token_address TEXT NOT NULL,
+                token_symbol TEXT NOT NULL,
+                market_cap REAL,
+                liquidity_usd REAL,
+                volume_h24 REAL,
+                holder_count INTEGER,
+                dex_paid INTEGER,
+                created_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_token_snapshots_chat_token_created
+            ON token_snapshots(chat_id, token_address, created_at);
             """
         )
         await self.conn.commit()
@@ -287,6 +329,67 @@ class Database:
                 LIMIT ?
                 """,
                 (chat_id, limit),
+            )
+        rows = await cursor.fetchall()
+        await cursor.close()
+        return [_row_to_call(row) for row in rows]
+
+    async def caller_calls(
+        self,
+        chat_id: int,
+        caller_user_id: int,
+        since_ts: int | None = None,
+        limit: int = 100,
+    ) -> list[CallRecord]:
+        if self.backend == "postgres":
+            async with self._pool().acquire() as conn:
+                if since_ts:
+                    rows = await conn.fetch(
+                        """
+                        SELECT * FROM calls
+                        WHERE chat_id = $1 AND caller_user_id = $2 AND created_at >= $3
+                        ORDER BY peak_multiple DESC, peak_cap DESC
+                        LIMIT $4
+                        """,
+                        chat_id,
+                        caller_user_id,
+                        since_ts,
+                        limit,
+                    )
+                else:
+                    rows = await conn.fetch(
+                        """
+                        SELECT * FROM calls
+                        WHERE chat_id = $1 AND caller_user_id = $2
+                        ORDER BY peak_multiple DESC, peak_cap DESC
+                        LIMIT $3
+                        """,
+                        chat_id,
+                        caller_user_id,
+                        limit,
+                    )
+            return [_row_to_call(row) for row in rows]
+
+        conn = self._conn()
+        if since_ts:
+            cursor = await conn.execute(
+                """
+                SELECT * FROM calls
+                WHERE chat_id = ? AND caller_user_id = ? AND created_at >= ?
+                ORDER BY peak_multiple DESC, peak_cap DESC
+                LIMIT ?
+                """,
+                (chat_id, caller_user_id, since_ts, limit),
+            )
+        else:
+            cursor = await conn.execute(
+                """
+                SELECT * FROM calls
+                WHERE chat_id = ? AND caller_user_id = ?
+                ORDER BY peak_multiple DESC, peak_cap DESC
+                LIMIT ?
+                """,
+                (chat_id, caller_user_id, limit),
             )
         rows = await cursor.fetchall()
         await cursor.close()
@@ -506,6 +609,106 @@ class Database:
         await cursor.close()
         return str(row["value"]) if row else None
 
+    async def add_token_snapshot(
+        self,
+        chat_id: int,
+        token: TokenScan,
+        holder_count: int | None = None,
+    ) -> None:
+        now = int(time.time())
+        if self.backend == "postgres":
+            async with self._pool().acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO token_snapshots (
+                        chat_id, token_address, token_symbol, market_cap, liquidity_usd,
+                        volume_h24, holder_count, dex_paid, created_at
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    """,
+                    chat_id,
+                    token.address,
+                    token.symbol,
+                    token.cap_for_tracking,
+                    token.liquidity_usd,
+                    token.volume_h24,
+                    holder_count,
+                    token.dex_paid,
+                    now,
+                )
+            return
+
+        conn = self._conn()
+        await conn.execute(
+            """
+            INSERT INTO token_snapshots (
+                chat_id, token_address, token_symbol, market_cap, liquidity_usd,
+                volume_h24, holder_count, dex_paid, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                chat_id,
+                token.address,
+                token.symbol,
+                token.cap_for_tracking,
+                token.liquidity_usd,
+                token.volume_h24,
+                holder_count,
+                None if token.dex_paid is None else int(bool(token.dex_paid)),
+                now,
+            ),
+        )
+        await conn.commit()
+
+    async def token_snapshot_range(self, chat_id: int, token_address: str) -> tuple[TokenSnapshot | None, TokenSnapshot | None]:
+        if self.backend == "postgres":
+            async with self._pool().acquire() as conn:
+                first = await conn.fetchrow(
+                    """
+                    SELECT * FROM token_snapshots
+                    WHERE chat_id = $1 AND token_address = $2
+                    ORDER BY created_at ASC, id ASC
+                    LIMIT 1
+                    """,
+                    chat_id,
+                    token_address,
+                )
+                last = await conn.fetchrow(
+                    """
+                    SELECT * FROM token_snapshots
+                    WHERE chat_id = $1 AND token_address = $2
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT 1
+                    """,
+                    chat_id,
+                    token_address,
+                )
+            return (_row_to_snapshot(first) if first else None, _row_to_snapshot(last) if last else None)
+
+        conn = self._conn()
+        first_cursor = await conn.execute(
+            """
+            SELECT * FROM token_snapshots
+            WHERE chat_id = ? AND token_address = ?
+            ORDER BY created_at ASC, id ASC
+            LIMIT 1
+            """,
+            (chat_id, token_address),
+        )
+        first = await first_cursor.fetchone()
+        await first_cursor.close()
+        last_cursor = await conn.execute(
+            """
+            SELECT * FROM token_snapshots
+            WHERE chat_id = ? AND token_address = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (chat_id, token_address),
+        )
+        last = await last_cursor.fetchone()
+        await last_cursor.close()
+        return (_row_to_snapshot(first) if first else None, _row_to_snapshot(last) if last else None)
+
     def _conn(self) -> aiosqlite.Connection:
         if not self.conn:
             raise RuntimeError("Database is not open.")
@@ -575,6 +778,28 @@ def _row_to_trader(row: aiosqlite.Row) -> TraderRecord:
         avg_multiple=float(row["avg_multiple"]),
         hits=int(row["hits"]),
     )
+
+
+def _row_to_snapshot(row: aiosqlite.Row) -> TokenSnapshot:
+    dex_paid = row["dex_paid"]
+    if dex_paid is not None:
+        dex_paid = bool(dex_paid)
+    return TokenSnapshot(
+        id=int(row["id"]),
+        chat_id=int(row["chat_id"]),
+        token_address=str(row["token_address"]),
+        token_symbol=str(row["token_symbol"]),
+        market_cap=_optional_float(row["market_cap"]),
+        liquidity_usd=_optional_float(row["liquidity_usd"]),
+        volume_h24=_optional_float(row["volume_h24"]),
+        holder_count=int(row["holder_count"]) if row["holder_count"] is not None else None,
+        dex_paid=dex_paid,
+        created_at=int(row["created_at"]),
+    )
+
+
+def _optional_float(value) -> float | None:
+    return float(value) if value is not None else None
 
 
 def _stats_from_rows(rows, min_hit_multiple: float) -> dict[str, float | int]:

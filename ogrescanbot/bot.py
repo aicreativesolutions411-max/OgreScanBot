@@ -20,16 +20,22 @@ from aiohttp import ClientError, web
 from PIL import Image, UnidentifiedImageError
 
 from .config import Settings, load_settings
-from .db import Database, period_to_since
+from .db import Database, TraderRecord, period_to_since
 from .dexscreener import DexscreenerClient
-from .extract import extract_token_queries, extract_x_post_links, is_solana_address
+from .extract import extract_solana_addresses, extract_token_queries, extract_x_post_links, is_solana_address
 from .formatting import (
     format_help,
     format_leaderboard,
     format_leaderboard_backup_snapshot,
+    format_cluster_report,
+    format_paid_trend,
     format_scan,
     format_scan_caption,
     format_status,
+    format_token_explainer,
+    format_trader_stats,
+    format_trader_passport,
+    format_why_loss,
     format_x_post_embed,
     powered_by_footer,
     user_display_name,
@@ -142,13 +148,19 @@ class OgreScanApp:
     def _register_handlers(self) -> None:
         self.dp.message.register(self.help_handler, Command("start", "help"))
         self.dp.message.register(self.set_backup_channel_command, lambda message: is_backup_command(message.text or ""))
-        self.dp.message.register(self.scan_command, Command("scan"))
+        self.dp.message.register(self.scan_command, Command("scan", "call"))
+        self.dp.message.register(self.smart_intel_command, Command("intel", "explain", "paid", "boosts", "cluster", "whylose"))
         self.dp.message.register(self.pnl_command, Command("pnl", "flex"))
         self.dp.message.register(self.pnl_command, lambda message: is_plain_card_command(message.text or ""))
+        self.dp.message.register(self.stats_command, Command("stats"))
+        self.dp.message.register(self.stats_command, lambda message: is_plain_stats_command(message.text or ""))
+        self.dp.message.register(self.calls_command, Command("calls"))
+        self.dp.message.register(self.calls_command, lambda message: is_plain_calls_command(message.text or ""))
         self.dp.message.register(self.leaderboard_command, Command("lb", "leaderboard"))
         self.dp.message.register(self.leaderboard_command, lambda message: is_plain_leaderboard_command(message.text or ""))
         self.dp.callback_query.register(self.leaderboard_period_callback, F.data.startswith("lb:"))
         self.dp.callback_query.register(self.scan_links_callback, F.data.startswith("scanmenu:"))
+        self.dp.callback_query.register(self.trader_menu_callback, F.data.startswith("trader:"))
         self.dp.message.register(self.status_command, Command("status"))
         self.dp.message.register(self.status_command, lambda message: is_plain_status_command(message.text or ""))
         self.dp.message.register(self.backup_command, Command("backup"))
@@ -162,7 +174,8 @@ class OgreScanApp:
     async def scan_command(self, message: Message) -> None:
         query = first_token_query_from_message(message, include_reply=True)
         if not query:
-            await message.reply("Send /scan followed by a Solana contract address, supported token link, or $ticker.")
+            command = command_name(message.text or "") or "scan"
+            await message.reply(f"Send /{command} followed by a Solana contract address, supported token link, or $ticker.")
             return
         await self.scan_and_reply(message, query)
 
@@ -185,6 +198,39 @@ class OgreScanApp:
                 )
             except Exception:
                 logging.exception("Failed to embed X post: %s", embed_url)
+
+    async def smart_intel_command(self, message: Message) -> None:
+        command = command_name(message.text or "")
+        wallet, query = intel_query_from_message(message, include_reply=True, prefer_last=command == "whylose")
+        if not query:
+            await message.reply("Send /intel, /explain, /paid, /cluster, or /whylose followed by a Solana CA or $ticker.")
+            return
+
+        token = await self.resolve_token(query)
+        if not token:
+            await message.reply("I could not find that Solana token on Dexscreener or Pump.fun yet.")
+            return
+
+        rug = await self.rug.summary(token.address) if self.rug else None
+        call = await self.db.get_call(message.chat.id, token.address)
+        first_snapshot, latest_snapshot = await self.db.token_snapshot_range(message.chat.id, token.address)
+        view = {"whylose": "why", "boosts": "paid", "explain": "exs", "intel": "exs"}.get(command, command)
+        text = await self.smart_intel_text(
+            message.chat.id,
+            token,
+            rug,
+            call,
+            view,
+            wallet=wallet,
+            first_snapshot=first_snapshot,
+            latest_snapshot=latest_snapshot,
+        )
+        await self.db.add_token_snapshot(message.chat.id, token, rug.holder_count if rug else None)
+        await message.reply(
+            text,
+            reply_markup=smart_intel_keyboard(token.address, view),
+            disable_web_page_preview=True,
+        )
 
     async def pnl_command(self, message: Message) -> None:
         query = first_token_query_from_message(message, include_reply=True)
@@ -228,6 +274,105 @@ class OgreScanApp:
             ),
         )
 
+    async def stats_command(self, message: Message) -> None:
+        user = passport_target_user(message)
+        if not user:
+            await message.reply("I need a Telegram user to show stats.")
+            return
+
+        calls = await self.db.caller_calls(message.chat.id, user.id, since_ts=None, limit=200)
+        trader = trader_record_from_calls(user.id, user_display_name(user), calls, self.settings.min_multiple_for_hit)
+        rank = await self.caller_rank(message.chat.id, user.id)
+        await message.reply(
+            format_trader_stats(
+                user.id,
+                user_display_name(user),
+                trader,
+                calls,
+                rank,
+                self.settings.min_multiple_for_hit,
+            ),
+            reply_markup=trader_menu_keyboard(user.id, "stats"),
+            disable_web_page_preview=True,
+        )
+
+    async def calls_command(self, message: Message) -> None:
+        user = passport_target_user(message)
+        if not user:
+            await message.reply("I need a Telegram user to show call history.")
+            return
+
+        args = command_args(message)
+        requested_period = args[0] if args else "all"
+        period, since_ts = period_to_since(requested_period)
+        calls = await self.db.caller_calls(message.chat.id, user.id, since_ts=since_ts, limit=200)
+        trader = trader_record_from_calls(user.id, user_display_name(user), calls, self.settings.min_multiple_for_hit)
+        await message.reply(
+            format_trader_passport(
+                period,
+                user.id,
+                user_display_name(user),
+                trader,
+                calls,
+                self.settings.min_multiple_for_hit,
+            ),
+            reply_markup=trader_menu_keyboard(user.id, "calls"),
+            disable_web_page_preview=True,
+        )
+
+    async def trader_menu_callback(self, callback: CallbackQuery) -> None:
+        if not callback.message or not callback.data:
+            await callback.answer()
+            return
+        try:
+            _prefix, view, user_id_text = callback.data.split(":", 2)
+            user_id = int(user_id_text)
+        except ValueError:
+            await callback.answer()
+            return
+
+        try:
+            text = await self.build_trader_menu_text(callback.message.chat.id, user_id, view)
+            await callback.message.edit_text(
+                text,
+                reply_markup=trader_menu_keyboard(user_id, view),
+                disable_web_page_preview=True,
+            )
+            await callback.answer()
+        except TelegramBadRequest as exc:
+            if "message is not modified" in str(exc).lower():
+                await callback.answer()
+                return
+            logging.exception("Trader menu update failed.")
+            await callback.answer("Could not update trader view right now.", show_alert=False)
+        except Exception:
+            logging.exception("Trader menu update failed.")
+            await callback.answer("Could not update trader view right now.", show_alert=False)
+
+    async def build_trader_menu_text(self, chat_id: int, user_id: int, view: str) -> str:
+        calls = await self.db.caller_calls(chat_id, user_id, since_ts=None, limit=200)
+        name = trader_name_from_calls(user_id, calls)
+        trader = trader_record_from_calls(user_id, name, calls, self.settings.min_multiple_for_hit)
+        if view == "calls":
+            return format_trader_passport("all", user_id, name, trader, calls, self.settings.min_multiple_for_hit)
+        if view == "leaderboard":
+            _period, text, _markup = await self.build_leaderboard_message(chat_id, "1d")
+            return text
+        rank = await self.caller_rank(chat_id, user_id)
+        return format_trader_stats(user_id, name, trader, calls, rank, self.settings.min_multiple_for_hit)
+
+    async def caller_rank(self, chat_id: int, caller_user_id: int) -> int | None:
+        traders = await self.db.top_traders(
+            chat_id,
+            since_ts=None,
+            min_hit_multiple=self.settings.min_multiple_for_hit,
+            limit=1000,
+        )
+        for index, trader in enumerate(traders, start=1):
+            if trader.caller_user_id == caller_user_id:
+                return index
+        return None
+
     async def leaderboard_command(self, message: Message) -> None:
         args = command_args(message)
         period, text, markup = await self.build_leaderboard_message(message.chat.id, args[0] if args else "1d")
@@ -269,11 +414,55 @@ class OgreScanApp:
         except ValueError:
             await callback.answer()
             return
-        token = await self.resolve_token(address, include_paid=True, include_ath=False)
+        include_ath = menu in {"exs", "exd", "exr", "exw", "exo", "paid", "cluster", "why", "scan"}
+        token = await self.resolve_token(address, include_paid=True, include_ath=include_ath)
         if not token:
             await callback.answer("Could not refresh those links right now.", show_alert=False)
             return
-        rug = await self.rug.summary(token.address) if self.rug and menu == "security" else None
+
+        needs_rug = menu in {"security", "exs", "exd", "exr", "exw", "exo", "paid", "cluster", "why", "scan"}
+        rug = await self.rug.summary(token.address) if self.rug and needs_rug else None
+        if menu in {"exs", "exd", "exr", "exw", "exo", "paid", "cluster", "why", "scan"}:
+            call = await self.db.get_call(callback.message.chat.id, token.address)
+            first_snapshot, latest_snapshot = await self.db.token_snapshot_range(callback.message.chat.id, token.address)
+            if menu == "scan":
+                caption = photo_caption(format_scan_caption(token, call, False, rug), limit=1000)
+            else:
+                caption = photo_caption(
+                    await self.smart_intel_text(
+                        callback.message.chat.id,
+                        token,
+                        rug,
+                        call,
+                        menu,
+                        first_snapshot=first_snapshot,
+                        latest_snapshot=latest_snapshot,
+                    ),
+                    limit=1000,
+                )
+                await self.db.add_token_snapshot(callback.message.chat.id, token, rug.holder_count if rug else None)
+            markup = scan_links_keyboard(token, rug, menu=menu if menu != "scan" else "main")
+            try:
+                if getattr(callback.message, "photo", None):
+                    await callback.message.edit_caption(caption=caption, reply_markup=markup)
+                else:
+                    await callback.message.edit_text(
+                        caption,
+                        reply_markup=markup,
+                        disable_web_page_preview=True,
+                    )
+                await callback.answer()
+            except TelegramBadRequest as exc:
+                if "message is not modified" in str(exc).lower():
+                    await callback.answer()
+                    return
+                logging.exception("Scan explanation update failed.")
+                await callback.answer("Could not update the scan right now.", show_alert=False)
+            except Exception:
+                logging.exception("Scan explanation update failed.")
+                await callback.answer("Could not update the scan right now.", show_alert=False)
+            return
+
         markup = scan_links_keyboard(token, rug, menu=menu)
         try:
             await callback.message.edit_reply_markup(reply_markup=markup)
@@ -287,6 +476,36 @@ class OgreScanApp:
         except Exception:
             logging.exception("Scan link menu update failed.")
             await callback.answer("Could not update links right now.", show_alert=False)
+
+    async def smart_intel_text(
+        self,
+        chat_id: int,
+        token,
+        rug,
+        call,
+        view: str,
+        wallet: str | None = None,
+        first_snapshot=None,
+        latest_snapshot=None,
+    ) -> str:
+        mode_map = {
+            "intel": "simple",
+            "explain": "simple",
+            "exs": "simple",
+            "exd": "degen",
+            "exr": "risk",
+            "exw": "whale",
+            "exo": "owner",
+        }
+        if view in mode_map:
+            return format_token_explainer(token, rug, call, mode=mode_map[view])
+        if view in {"paid", "boosts"}:
+            return format_paid_trend(token, rug, first_snapshot, latest_snapshot)
+        if view == "cluster":
+            return format_cluster_report(token, rug)
+        if view == "why":
+            return format_why_loss(token, call, wallet=wallet)
+        return format_token_explainer(token, rug, call)
 
     async def build_leaderboard_message(
         self,
@@ -366,6 +585,7 @@ class OgreScanApp:
             call, is_new_call = None, False
 
         rug = await self.rug.summary(token.address) if self.rug else None
+        await self.db.add_token_snapshot(message.chat.id, token, rug.holder_count if rug else None)
         scan_text = photo_caption(format_scan_caption(token, call, is_new_call, rug), limit=1000)
         banner = await self.build_scan_photo(token)
         links = scan_links_keyboard(token, rug)
@@ -722,6 +942,20 @@ def is_plain_card_command(text: str) -> bool:
     return command_name(stripped) in {"pnl", "flex"}
 
 
+def is_plain_stats_command(text: str) -> bool:
+    stripped = (text or "").strip()
+    if not stripped or stripped.startswith("/"):
+        return False
+    return command_name(stripped) == "stats"
+
+
+def is_plain_calls_command(text: str) -> bool:
+    stripped = (text or "").strip()
+    if not stripped or stripped.startswith("/"):
+        return False
+    return command_name(stripped) == "calls"
+
+
 def is_plain_leaderboard_command(text: str) -> bool:
     stripped = (text or "").strip()
     if not stripped or stripped.startswith("/"):
@@ -734,6 +968,39 @@ def is_plain_status_command(text: str) -> bool:
     if not stripped or stripped.startswith("/"):
         return False
     return command_name(stripped) == "status"
+
+
+def passport_target_user(message: Message):
+    reply = getattr(message, "reply_to_message", None)
+    if reply and reply.from_user:
+        return reply.from_user
+    return message.from_user
+
+
+def trader_record_from_calls(
+    caller_user_id: int,
+    caller_name: str,
+    calls,
+    min_hit_multiple: float,
+) -> TraderRecord | None:
+    if not calls:
+        return None
+    multiples = [call.peak_multiple for call in calls]
+    hits = [value for value in multiples if value >= min_hit_multiple]
+    return TraderRecord(
+        caller_user_id=caller_user_id,
+        caller_name=caller_name,
+        total_calls=len(calls),
+        best_multiple=max(multiples),
+        avg_multiple=sum(multiples) / len(multiples),
+        hits=len(hits),
+    )
+
+
+def trader_name_from_calls(user_id: int, calls) -> str:
+    if calls:
+        return calls[0].caller_name
+    return str(user_id)
 
 
 def first_token_query_from_message(message: Message, include_reply: bool = False) -> str | None:
@@ -749,13 +1016,75 @@ def first_token_query_from_message(message: Message, include_reply: bool = False
     return None
 
 
+def intel_query_from_message(
+    message: Message,
+    include_reply: bool = False,
+    prefer_last: bool = False,
+) -> tuple[str | None, str | None]:
+    sources = [message.text, message.caption]
+    reply = getattr(message, "reply_to_message", None)
+    if include_reply and reply:
+        sources.extend([reply.text, reply.caption])
+
+    for source in sources:
+        text = source or ""
+        queries = extract_token_queries(text)
+        if not queries:
+            continue
+        addresses = extract_solana_addresses(text)
+        wallet = addresses[0] if prefer_last and len(addresses) >= 2 else None
+        query = queries[-1] if prefer_last else queries[0]
+        return wallet, query
+    return None, None
+
+
 def leaderboard_keyboard(active_period: str) -> InlineKeyboardMarkup:
     periods = [("1d", "1D"), ("1w", "1W"), ("2w", "2W"), ("1m", "1M")]
     buttons = []
     for key, label in periods:
-        text = f"• {label} •" if key == active_period else label
+        text = f"[{label}]" if key == active_period else label
         buttons.append(InlineKeyboardButton(text=text, callback_data=f"lb:{key}"))
     return InlineKeyboardMarkup(inline_keyboard=[buttons])
+
+
+def trader_menu_keyboard(user_id: int, active_view: str) -> InlineKeyboardMarkup:
+    items = [
+        ("stats", "Stats"),
+        ("calls", "Calls"),
+        ("leaderboard", "Group LB"),
+    ]
+    buttons = []
+    for view, label in items:
+        text = f"[{label}]" if view == active_view else label
+        buttons.append(InlineKeyboardButton(text=text, callback_data=f"trader:{view}:{user_id}"))
+    return InlineKeyboardMarkup(inline_keyboard=[buttons])
+
+
+def smart_intel_keyboard(address: str, active_view: str = "exs") -> InlineKeyboardMarkup:
+    rows = [
+        [
+            intel_button("Simple Read", "exs", address, active_view),
+            intel_button("Risk Check", "exr", address, active_view),
+        ],
+        [
+            intel_button("Whale View", "exw", address, active_view),
+            intel_button("Project View", "exo", address, active_view),
+        ],
+        [
+            intel_button("Paid Trend", "paid", address, active_view),
+            intel_button("Wallet Map", "cluster", address, active_view),
+        ],
+        [
+            intel_button("Loss Check", "why", address, active_view),
+            InlineKeyboardButton(text="← Back to Scan", callback_data=scan_menu_data("scan", address)),
+        ],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def intel_button(label: str, view: str, address: str, active_view: str) -> InlineKeyboardButton:
+    text = f"[{label}]" if view == active_view else label
+    return InlineKeyboardButton(text=text, callback_data=scan_menu_data(view, address))
 
 
 def scan_links_keyboard(token, rug=None, menu: str = "main") -> InlineKeyboardMarkup:
@@ -846,19 +1175,33 @@ def scan_links_keyboard(token, rug=None, menu: str = "main") -> InlineKeyboardMa
         add_back_row(rows, address)
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
+    if menu == "intel":
+        return smart_intel_keyboard(address)
+
+    if menu in {"exs", "exd", "exr", "exw", "exo", "paid", "cluster", "why"}:
+        return smart_intel_keyboard(address, menu)
+
     rows.append(
         [
-            InlineKeyboardButton(text="📈 Charts", callback_data=scan_menu_data("charts", address)),
-            InlineKeyboardButton(text="𝕏 Links", callback_data=scan_menu_data("x", address)),
+            InlineKeyboardButton(text="Explain", callback_data=scan_menu_data("exs", address)),
+            InlineKeyboardButton(text="Paid Trend", callback_data=scan_menu_data("paid", address)),
+            InlineKeyboardButton(text="Wallet Map", callback_data=scan_menu_data("cluster", address)),
         ]
     )
     rows.append(
         [
-            InlineKeyboardButton(text="🛡 Security", callback_data=scan_menu_data("security", address)),
-            InlineKeyboardButton(text="🌐 Socials", callback_data=scan_menu_data("socials", address)),
+            InlineKeyboardButton(text="Loss Check", callback_data=scan_menu_data("why", address)),
+            InlineKeyboardButton(text="Charts", callback_data=scan_menu_data("charts", address)),
+            InlineKeyboardButton(text="Trade", callback_data=scan_menu_data("trade", address)),
         ]
     )
-    rows.append([InlineKeyboardButton(text="⚡ Trade", callback_data=scan_menu_data("trade", address))])
+    rows.append(
+        [
+            InlineKeyboardButton(text="Security", callback_data=scan_menu_data("security", address)),
+            InlineKeyboardButton(text="X Links", callback_data=scan_menu_data("x", address)),
+            InlineKeyboardButton(text="Socials", callback_data=scan_menu_data("socials", address)),
+        ]
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
