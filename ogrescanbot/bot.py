@@ -148,6 +148,7 @@ class OgreScanApp:
         self.dp.message.register(self.leaderboard_command, Command("lb", "leaderboard"))
         self.dp.message.register(self.leaderboard_command, lambda message: is_plain_leaderboard_command(message.text or ""))
         self.dp.callback_query.register(self.leaderboard_period_callback, F.data.startswith("lb:"))
+        self.dp.callback_query.register(self.scan_links_callback, F.data.startswith("scanmenu:"))
         self.dp.message.register(self.status_command, Command("status"))
         self.dp.message.register(self.status_command, lambda message: is_plain_status_command(message.text or ""))
         self.dp.message.register(self.backup_command, Command("backup"))
@@ -257,6 +258,35 @@ class OgreScanApp:
         except Exception:
             logging.exception("Leaderboard period update failed.")
             await callback.answer("Could not update leaderboard right now.", show_alert=False)
+
+    async def scan_links_callback(self, callback: CallbackQuery) -> None:
+        if not callback.message or not callback.data:
+            await callback.answer()
+            return
+
+        try:
+            _prefix, menu, address = callback.data.split(":", 2)
+        except ValueError:
+            await callback.answer()
+            return
+        token = await self.resolve_token(address, include_paid=True, include_ath=False)
+        if not token:
+            await callback.answer("Could not refresh those links right now.", show_alert=False)
+            return
+        rug = await self.rug.summary(token.address) if self.rug and menu == "security" else None
+        markup = scan_links_keyboard(token, rug, menu=menu)
+        try:
+            await callback.message.edit_reply_markup(reply_markup=markup)
+            await callback.answer()
+        except TelegramBadRequest as exc:
+            if "message is not modified" in str(exc).lower():
+                await callback.answer()
+                return
+            logging.exception("Scan link menu update failed.")
+            await callback.answer("Could not update links right now.", show_alert=False)
+        except Exception:
+            logging.exception("Scan link menu update failed.")
+            await callback.answer("Could not update links right now.", show_alert=False)
 
     async def build_leaderboard_message(
         self,
@@ -728,63 +758,110 @@ def leaderboard_keyboard(active_period: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[buttons])
 
 
-def scan_links_keyboard(token, rug=None) -> InlineKeyboardMarkup:
+def scan_links_keyboard(token, rug=None, menu: str = "main") -> InlineKeyboardMarkup:
     address = token.address
     pair = token.pair_address or token.address
     rows: list[list[InlineKeyboardButton]] = []
-    add_button_row(
-        rows,
-        [
-            ("DEX", token.pair_url or f"https://dexscreener.com/solana/{address}"),
-            ("Rug", f"https://rugcheck.xyz/tokens/{address}"),
-            ("Bubble", f"https://app.bubblemaps.io/sol/token/{address}"),
-        ],
-    )
-    add_button_row(
-        rows,
-        [
-            ("Solscan", f"https://solscan.io/token/{address}"),
-            ("Pump", f"https://pump.fun/{address}"),
-            ("GMGN", f"https://gmgn.ai/sol/token/{address}"),
-        ],
-    )
-    add_button_row(
-        rows,
-        [
-            ("GT", f"https://www.geckoterminal.com/solana/pools/{pair}"),
-            ("Birdeye", f"https://birdeye.so/token/{address}?chain=solana"),
-            ("Dextools", f"https://www.dextools.io/app/en/solana/pair-explorer/{pair}"),
-        ],
-    )
-
     terms = [address]
     if token.symbol and token.symbol != "?":
         terms.append(f"${token.symbol}")
     query = " OR ".join(terms)
-    add_button_row(
-        rows,
-        [
-            ("Recent X", f"https://x.com/search?q={quote_plus(query)}&src=typed_query&f=live"),
-            ("Big Xs", f"https://x.com/search?q={quote_plus(query + ' min_faves:25')}&src=typed_query&f=top"),
-        ],
-    )
 
-    add_button_row(
-        rows,
+    if menu == "charts":
+        add_button_row(
+            rows,
+            [
+                ("Dexscreener", token.pair_url or f"https://dexscreener.com/solana/{address}"),
+                ("Dextools", f"https://www.dextools.io/app/en/solana/pair-explorer/{pair}"),
+            ],
+        )
+        add_button_row(
+            rows,
+            [
+                ("GeckoTerminal", f"https://www.geckoterminal.com/solana/pools/{pair}"),
+                ("Birdeye", f"https://birdeye.so/token/{address}?chain=solana"),
+            ],
+        )
+        add_button_row(rows, [("Solscan", f"https://solscan.io/token/{address}")])
+        add_back_row(rows, address)
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    if menu == "x":
+        add_button_row(
+            rows,
+            [
+                ("Main X", first_token_social(token, {"twitter", "x"})),
+                ("Recent", f"https://x.com/search?q={quote_plus(query)}&src=typed_query&f=live"),
+            ],
+        )
+        add_button_row(rows, [("Big Mentions", f"https://x.com/search?q={quote_plus(query + ' min_faves:25')}&src=typed_query&f=top")])
+        add_back_row(rows, address)
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    if menu == "security":
+        add_button_row(
+            rows,
+            [
+                ("RugCheck", f"https://rugcheck.xyz/tokens/{address}"),
+                ("BubbleMaps", f"https://app.bubblemaps.io/sol/token/{address}"),
+            ],
+        )
+        add_button_row(
+            rows,
+            [
+                ("DEX Paid", token.pair_url or f"https://dexscreener.com/solana/{address}"),
+                ("Dev Wallet", dev_wallet_url(rug)),
+            ],
+        )
+        add_back_row(rows, address)
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    if menu == "trade":
+        add_button_row(
+            rows,
+            [
+                ("Pump.fun", f"https://pump.fun/{address}"),
+                ("GMGN", f"https://gmgn.ai/sol/token/{address}"),
+            ],
+        )
+        add_button_row(rows, [("Dexscreener", token.pair_url or f"https://dexscreener.com/solana/{address}")])
+        add_back_row(rows, address)
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    if menu == "socials":
+        add_button_row(
+            rows,
+            [
+                ("Telegram", first_token_social(token, {"telegram", "tg"})),
+                ("Website", first_token_website(token)),
+            ],
+        )
+        add_button_row(rows, [("X", first_token_social(token, {"twitter", "x"}))])
+        add_back_row(rows, address)
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    rows.append(
         [
-            ("DEX Paid", token.pair_url or f"https://dexscreener.com/solana/{address}"),
-            ("Dev Wallet", dev_wallet_url(rug)),
-        ],
+            InlineKeyboardButton(text="📈 Charts", callback_data=scan_menu_data("charts", address)),
+            InlineKeyboardButton(text="𝕏 Links", callback_data=scan_menu_data("x", address)),
+        ]
     )
-    add_button_row(
-        rows,
+    rows.append(
         [
-            ("TG", first_token_social(token, {"telegram", "tg"})),
-            ("Web", first_token_website(token)),
-            ("X", first_token_social(token, {"twitter", "x"})),
-        ],
+            InlineKeyboardButton(text="🛡 Security", callback_data=scan_menu_data("security", address)),
+            InlineKeyboardButton(text="🌐 Socials", callback_data=scan_menu_data("socials", address)),
+        ]
     )
+    rows.append([InlineKeyboardButton(text="⚡ Trade", callback_data=scan_menu_data("trade", address))])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def scan_menu_data(menu: str, address: str) -> str:
+    return f"scanmenu:{menu}:{address}"
+
+
+def add_back_row(rows: list[list[InlineKeyboardButton]], address: str) -> None:
+    rows.append([InlineKeyboardButton(text="Back", callback_data=scan_menu_data("main", address))])
 
 
 def dev_wallet_url(rug) -> str | None:

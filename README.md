@@ -19,7 +19,7 @@ Solana-first Telegram scanner bot using free/public data sources.
 - Pulls token metadata images/descriptions from Dexscreener and falls back to Pump.fun public metadata when available.
 - Uses Dexscreener pair fallbacks plus Pump.fun cap metadata when Dex does not return market cap/FDV on the selected pair.
 - Shows DEX paid status and RugCheck dev-sold status when free endpoints return it.
-- Scan captions use compact icon sections for token stats, socials, audit, and calls, with link buttons for charts, audit, BubbleMaps, X, and trading tools.
+- Scan captions use compact icon sections for token stats, socials, audit, and calls, with categorized button menus for charts, X links, security, socials, and trade tools.
 - Auto-scan only reads the new message text/caption, so replying to an old CA does not trigger a scan unless the reply itself includes a `$ticker` or CA.
 - Adds quick links for BubbleMaps, RugCheck, Pump.fun, GMGN, DEX, and X searches for high-engagement recent posts.
 - Auto-embeds X/Twitter post links and credits the Telegram user who shared the link.
