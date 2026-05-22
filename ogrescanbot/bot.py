@@ -820,11 +820,17 @@ def scan_links_keyboard(token, rug=None, menu: str = "main") -> InlineKeyboardMa
         add_button_row(
             rows,
             [
-                ("Pump.fun", f"https://pump.fun/{address}"),
+                ("OgreTradeBot", "https://t.me/ogretradebot"),
                 ("GMGN", f"https://gmgn.ai/sol/token/{address}"),
             ],
         )
-        add_button_row(rows, [("Dexscreener", token.pair_url or f"https://dexscreener.com/solana/{address}")])
+        add_button_row(
+            rows,
+            [
+                ("Pump.fun", f"https://pump.fun/{address}"),
+                ("Dexscreener", token.pair_url or f"https://dexscreener.com/solana/{address}"),
+            ],
+        )
         add_back_row(rows, address)
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -861,7 +867,7 @@ def scan_menu_data(menu: str, address: str) -> str:
 
 
 def add_back_row(rows: list[list[InlineKeyboardButton]], address: str) -> None:
-    rows.append([InlineKeyboardButton(text="Back", callback_data=scan_menu_data("main", address))])
+    rows.append([InlineKeyboardButton(text="← Back", callback_data=scan_menu_data("main", address))])
 
 
 def dev_wallet_url(rug) -> str | None:
