@@ -89,9 +89,11 @@ def format_scan_caption(
     call: CallRecord | None,
     is_new_call: bool,
     rug: RugSummary | None = None,
+    posted_user_id: int | None = None,
+    posted_name: str | None = None,
 ) -> str:
     status = "New first call" if is_new_call else "First called"
-    caller = caller_profile_link(call) if call else "unknown"
+    caller = caller_profile_link(call) if call else telegram_user_link(posted_user_id, posted_name)
     called_at = money(call.initial_cap) if call else "n/a"
     now = money(call.last_cap) if call else money(token.cap_for_tracking)
     best = f"{call.peak_multiple:.2f}x" if call else "n/a"
@@ -108,7 +110,7 @@ def format_scan_caption(
         if call
         else (
             "🧌 <b>Call</b>\n"
-            "└ CA detected. Market data is not indexed yet, so X tracking starts once MC/FDV is available."
+            f"└ CA posted by {caller}. X tracking starts once MC/FDV is available."
         )
     )
     stats = [
