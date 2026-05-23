@@ -101,6 +101,11 @@ def format_scan_caption(
     current = f"{current_value:.2f}x" if current_value is not None else "n/a"
     ath = token_ath_value(token, call)
     quick_links = scan_quick_links(token)
+    header_call = (
+        f"├ 🧌 {html.escape(status)} by {caller}"
+        if call
+        else f"├ 🧌 Posted by {caller}"
+    )
     call_section = (
         f"🧌 <b>Call</b>\n"
         f"├ {html.escape(status)} by {caller}\n"
@@ -135,6 +140,7 @@ def format_scan_caption(
         f"🧬 <b>{html.escape(token.name)} (${html.escape(token.symbol)})</b>\n"
         f"{ca_click_link(token, full=True)}\n"
         f"├ {quick_links}\n"
+        f"{header_call}\n"
         f"└ 🌱 #SOL • {html.escape(token.dex_id)} • {age_from_ms(token.created_at_ms)}\n\n"
         f"{chr(10).join(stats)}\n\n"
         f"🔗 <b>Socials</b>\n"
@@ -558,7 +564,7 @@ def caller_profile_link(call: CallRecord | None) -> str:
 
 
 def telegram_user_link(user_id: int | None, name: str | None) -> str:
-    clean = html.escape(name or "unknown")
+    clean = html.escape(display_username(name))
     if user_id and user_id > 0:
         return f"<a href=\"tg://user?id={user_id}\">{clean}</a>"
     return clean
