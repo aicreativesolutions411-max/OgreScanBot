@@ -43,6 +43,9 @@ class GeckoTerminalClient:
         )
 
     async def best_high_price(self, pool_address: str) -> tuple[float, int] | None:
+        return await self.best_high_price_since(pool_address)
+
+    async def best_high_price_since(self, pool_address: str, since_ts: int | None = None) -> tuple[float, int] | None:
         candidates = [
             ("hour", 1, 1000),
             ("minute", 15, 1000),
@@ -57,6 +60,8 @@ class GeckoTerminalClient:
                     continue
                 ts = _int_or_none(candle[0])
                 high = _float_or_none(candle[2])
+                if since_ts and ts and ts < since_ts:
+                    continue
                 if ts and high and high > best_price:
                     best_price = high
                     best_ts = ts

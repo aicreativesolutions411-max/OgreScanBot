@@ -229,7 +229,7 @@ class OgreScanApp:
             await message.reply("I could not find that Solana token on Dexscreener or Pump.fun yet.")
             return
 
-        rug = await self.rug.summary(token.address) if self.rug else None
+        rug = await self.safe_rug_summary(token.address)
         rug = await self.enrich_security_data(token, rug)
         call = await self.db.get_call(message.chat.id, token.address)
         first_snapshot, latest_snapshot = await self.db.token_snapshot_range(message.chat.id, token.address)
@@ -244,7 +244,10 @@ class OgreScanApp:
             first_snapshot=first_snapshot,
             latest_snapshot=latest_snapshot,
         )
-        await self.db.add_token_snapshot(message.chat.id, token, snapshot_holder_count(rug))
+        try:
+            await self.db.add_token_snapshot(message.chat.id, token, snapshot_holder_count(rug))
+        except Exception:
+            logging.exception("Token snapshot save failed; continuing smart intel reply.")
         await message.reply(
             text,
             reply_markup=smart_intel_keyboard(token.address, view),
@@ -271,10 +274,14 @@ class OgreScanApp:
 
         try:
             call, _ = await self.db.upsert_call(message.chat.id, token, user.id, user_display_name(user))
+            call = await self.refresh_call_peak_from_ath(token, call)
         except ValueError:
             await message.reply("That token is missing market cap/FDV data, so I cannot build a tracked PNL/FLEX card yet.")
             return
-        await self.maybe_backup_database()
+        try:
+            await self.maybe_backup_database()
+        except Exception:
+            logging.exception("Backup after PNL update failed; continuing card.")
         current_x = call.last_cap / call.initial_cap if call.initial_cap else call.peak_multiple
         result_line = pnl_result_line(call, current_x)
         card = build_pnl_card(token, call, title=title)
@@ -457,7 +464,7 @@ class OgreScanApp:
             return
 
         needs_rug = menu in {"security", "exs", "exd", "exr", "exw", "exo", "paid", "cluster", "why", "scan"}
-        rug = await self.rug.summary(token.address) if self.rug and needs_rug else None
+        rug = await self.safe_rug_summary(token.address) if needs_rug else None
         rug = await self.enrich_security_data(token, rug) if needs_rug else rug
         if menu in {"exs", "exd", "exr", "exw", "exo", "paid", "cluster", "why", "scan"}:
             call = await self.db.get_call(callback.message.chat.id, token.address)
@@ -477,7 +484,10 @@ class OgreScanApp:
                     ),
                     limit=1000,
                 )
-                await self.db.add_token_snapshot(callback.message.chat.id, token, snapshot_holder_count(rug))
+                try:
+                    await self.db.add_token_snapshot(callback.message.chat.id, token, snapshot_holder_count(rug))
+                except Exception:
+                    logging.exception("Token snapshot save failed; continuing callback reply.")
             markup = scan_links_keyboard(token, rug, menu=menu if menu != "scan" else "main")
             try:
                 if getattr(callback.message, "photo", None):
@@ -632,10 +642,20 @@ class OgreScanApp:
         caller_name = user_display_name(user) if user else "unknown"
         try:
             call, is_new_call = await self.db.upsert_call(message.chat.id, token, caller_id, caller_name)
-            await self.maybe_backup_database()
+            call = await self.refresh_call_peak_from_ath(token, call)
         except ValueError:
             call, is_new_call = None, False
-        await self.db.add_token_snapshot(message.chat.id, token, snapshot_holder_count(rug))
+        except Exception:
+            logging.exception("Call tracking failed; sending scan without stored call.")
+            call, is_new_call = None, False
+        try:
+            await self.maybe_backup_database()
+        except Exception:
+            logging.exception("Backup after call update failed; continuing scan.")
+        try:
+            await self.db.add_token_snapshot(message.chat.id, token, snapshot_holder_count(rug))
+        except Exception:
+            logging.exception("Token snapshot save failed; continuing scan.")
         scan_text = photo_caption(
             format_scan_caption(
                 token,
@@ -675,7 +695,8 @@ class OgreScanApp:
                 if response.status >= 400:
                     return None
                 data = await response.read()
-        except ClientError:
+        except Exception:
+            logging.exception("Image download failed for %s", url)
             return None
         if not data or len(data) > 10_000_000:
             return None
@@ -686,19 +707,31 @@ class OgreScanApp:
         if is_solana_address(query):
             return await self.resolve_address_token(query, include_paid=include_paid, include_ath=include_ath, allow_fallback=True)
 
-        token = await self.dex.scan_solana_token(query)
+        try:
+            token = await self.dex.scan_solana_token(query)
+        except Exception:
+            logging.exception("Dexscreener ticker lookup failed for %s", query)
+            token = None
         if token:
             return await self.finalize_resolved_token(token, include_paid=include_paid, include_ath=include_ath)
 
         if self.jupiter:
-            mint = await self.jupiter.best_token_mint(query)
+            try:
+                mint = await self.jupiter.best_token_mint(query)
+            except Exception:
+                logging.exception("Jupiter ticker lookup failed for %s", query)
+                mint = None
             if mint:
                 token = await self.resolve_address_token(mint, include_paid=include_paid, include_ath=include_ath, allow_fallback=False)
                 if token:
                     return token
 
         if self.pump:
-            pump_mint = await self.pump.best_token_mint_by_ticker(query)
+            try:
+                pump_mint = await self.pump.best_token_mint_by_ticker(query)
+            except Exception:
+                logging.exception("Pump ticker lookup failed for %s", query)
+                pump_mint = None
             if pump_mint:
                 token = await self.resolve_address_token(
                     pump_mint,
@@ -788,10 +821,52 @@ class OgreScanApp:
             return token
         return replace(token, dex_paid=bool(token.dex_paid or paid))
 
+    async def refresh_call_peak_from_ath(self, token, call):
+        if not call:
+            return call
+
+        current_cap = token.cap_for_tracking or call.last_cap
+        peak_cap = max(call.peak_cap, current_cap)
+
+        if token.ath_market_cap and (
+            not token.ath_timestamp or token.ath_timestamp >= call.created_at
+        ):
+            peak_cap = max(peak_cap, token.ath_market_cap)
+
+        if self.gecko and token.pair_address and token.price_usd and token.cap_for_tracking:
+            try:
+                supply = token.cap_for_tracking / token.price_usd if token.price_usd > 0 else None
+                best = await self.gecko.best_high_price_since(token.pair_address, call.created_at)
+                if supply and best:
+                    high_price, _high_ts = best
+                    peak_cap = max(peak_cap, high_price * supply)
+            except Exception:
+                logging.exception("Call ATH refresh failed for %s", token.address)
+
+        if peak_cap > call.peak_cap or current_cap != call.last_cap:
+            try:
+                return await self.db.update_call_caps(call, token, current_cap, peak_cap)
+            except Exception:
+                logging.exception("Call cap update failed for %s", token.address)
+        return call
+
+    async def safe_rug_summary(self, address: str):
+        if not self.rug:
+            return None
+        try:
+            return await self.rug.summary(address)
+        except Exception:
+            logging.exception("RugCheck summary failed for %s", address)
+            return None
+
     async def enrich_security_data(self, token, rug):
         if not self.solana:
             return rug
-        onchain = await self.solana.security_summary(token.address)
+        try:
+            onchain = await self.solana.security_summary(token.address)
+        except Exception:
+            logging.exception("Solana security enrichment failed for %s", token.address)
+            return rug
         return merge_onchain_security(rug, onchain)
 
     async def strict_filter_enabled(self, chat_id: int) -> bool:
@@ -859,7 +934,7 @@ class OgreScanApp:
         changed = 0
         for record in calls:
             try:
-                token = await self.resolve_token(record.token_address, include_paid=False, include_ath=False)
+                token = await self.resolve_token(record.token_address, include_paid=False, include_ath=True)
                 if not token or not token.cap_for_tracking:
                     continue
                 updated, _ = await self.db.upsert_call(
@@ -868,6 +943,7 @@ class OgreScanApp:
                     record.caller_user_id,
                     record.caller_name,
                 )
+                updated = await self.refresh_call_peak_from_ath(token, updated)
                 if updated.last_cap != record.last_cap or updated.peak_multiple != record.peak_multiple:
                     changed += 1
             except Exception:

@@ -19,7 +19,7 @@ Solana-first Telegram scanner bot using free/public data sources.
 - Shows `/calls` history for a trader from that chat's tracked calls, hit rate, best calls, and badges.
 - Shows `/stats` as a quick trader profile with rank, win rate, best/worst trade, favorite chain, and badges. Stats, Calls, and Group LB switch in-place with buttons.
 - Generates matching call-based PNL/flex cards with `/pnl <ca>`, `/flex <ca>`, `pnl <ca>`, or `flex <ca>`.
-- PNL/flex cards use text over the image with no stat boxes, showing a big green call-to-ATH X or a big red loss.
+- PNL/flex cards refresh the stored call peak from OHLCV high since the call, then show a big green call-to-ATH X or a big red loss.
 - Pulls token metadata images/descriptions from Dexscreener and falls back to Pump.fun public metadata when available.
 - Uses Dexscreener pair fallbacks plus Pump.fun cap metadata when Dex does not return market cap/FDV on the selected pair.
 - Shows DEX paid status and RugCheck dev-sold status when free endpoints return it.

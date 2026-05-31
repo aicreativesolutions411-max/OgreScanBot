@@ -281,6 +281,53 @@ class Database:
         await cursor.close()
         return _row_to_call(row) if row else None
 
+    async def update_call_caps(
+        self,
+        call: CallRecord,
+        token: TokenScan,
+        last_cap: float | None,
+        peak_cap: float | None,
+    ) -> CallRecord:
+        now = int(time.time())
+        clean_last = last_cap if last_cap and last_cap > 0 else call.last_cap
+        clean_peak = max(call.peak_cap, clean_last, peak_cap or 0)
+        peak_multiple = max(
+            call.peak_multiple,
+            clean_peak / call.initial_cap if call.initial_cap > 0 else call.peak_multiple,
+        )
+
+        if self.backend == "postgres":
+            async with self._pool().acquire() as conn:
+                await conn.execute(
+                    """
+                    UPDATE calls
+                    SET token_name = $1, token_symbol = $2, peak_cap = $3, peak_multiple = $4,
+                        last_cap = $5, updated_at = $6
+                    WHERE id = $7
+                    """,
+                    token.name,
+                    token.symbol,
+                    clean_peak,
+                    peak_multiple,
+                    clean_last,
+                    now,
+                    call.id,
+                )
+            return (await self.get_call(call.chat_id, call.token_address)) or call
+
+        conn = self._conn()
+        await conn.execute(
+            """
+            UPDATE calls
+            SET token_name = ?, token_symbol = ?, peak_cap = ?, peak_multiple = ?,
+                last_cap = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (token.name, token.symbol, clean_peak, peak_multiple, clean_last, now, call.id),
+        )
+        await conn.commit()
+        return (await self.get_call(call.chat_id, call.token_address)) or call
+
     async def leaderboard(self, chat_id: int, since_ts: int | None = None, limit: int = 10) -> list[CallRecord]:
         if self.backend == "postgres":
             async with self._pool().acquire() as conn:
