@@ -21,6 +21,7 @@ Solana-first Telegram scanner bot using free/public data sources.
 - Generates matching call-based PNL/flex cards with `/pnl <ca>`, `/flex <ca>`, `pnl <ca>`, or `flex <ca>`.
 - PNL/flex cards refresh the stored call peak from OHLCV high since the call, then show a big green call-to-ATH X or a big red loss.
 - Posts chart images in-chat with `/chart <ca_or_$ticker_or_stock_or_crypto>`. Solana tokens use free GeckoTerminal candles, while stocks and major crypto symbols/names use free Yahoo Finance chart data.
+- Also accepts plain `chart <symbol>` in chats for the same in-chat image flow.
 - Pulls token metadata images/descriptions from Dexscreener and falls back to Pump.fun public metadata when available.
 - Uses Dexscreener pair fallbacks plus Pump.fun cap metadata when Dex does not return market cap/FDV on the selected pair.
 - Shows DEX paid status and RugCheck dev-sold status when free endpoints return it.
@@ -83,6 +84,7 @@ python -m ogrescanbot
 /scan <solana_ca_or_link_or_$ticker>
 /call <solana_ca_or_link_or_$ticker>
 /chart <solana_ca_or_$ticker_or_stock_or_crypto>
+chart <solana_ca_or_$ticker_or_stock_or_crypto>
 /intel <solana_ca_or_link_or_$ticker>
 /explain <solana_ca_or_link_or_$ticker>
 /paid <solana_ca_or_link_or_$ticker>

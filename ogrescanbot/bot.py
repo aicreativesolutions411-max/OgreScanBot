@@ -170,6 +170,7 @@ class OgreScanApp:
         self.dp.message.register(self.set_backup_channel_command, lambda message: is_backup_command(message.text or ""))
         self.dp.message.register(self.scan_command, Command("scan", "call"))
         self.dp.message.register(self.chart_command, Command("chart"))
+        self.dp.message.register(self.chart_command, lambda message: is_plain_chart_command(message.text or ""))
         self.dp.message.register(self.smart_intel_command, Command("intel", "explain", "paid", "boosts", "cluster", "whylose"))
         self.dp.message.register(self.pnl_command, Command("pnl", "flex"))
         self.dp.message.register(self.pnl_command, lambda message: is_plain_card_command(message.text or ""))
@@ -1259,6 +1260,13 @@ def is_plain_card_command(text: str) -> bool:
     if not stripped or stripped.startswith("/"):
         return False
     return command_name(stripped) in {"pnl", "flex"}
+
+
+def is_plain_chart_command(text: str) -> bool:
+    stripped = (text or "").strip()
+    if not stripped or stripped.startswith("/"):
+        return False
+    return command_name(stripped) == "chart"
 
 
 def is_plain_stats_command(text: str) -> bool:

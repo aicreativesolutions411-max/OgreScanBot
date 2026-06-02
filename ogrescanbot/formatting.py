@@ -464,6 +464,7 @@ def format_help(bot_name: str) -> str:
         "The first paste in each chat becomes that chat's call.\n\n"
         "<b>Commands</b>\n"
         "|- /scan or /call &lt;ca, link, or $ticker&gt;\n"
+        "|- /chart &lt;ca, $ticker, BTC, TSLA, or company name&gt;\n"
         "|- /intel &lt;ca or $ticker&gt;\n"
         "|- /pnl | /flex &lt;ca or $ticker&gt;\n"
         "|- /stats\n"
