@@ -20,6 +20,7 @@ from aiohttp import ClientError, web
 from PIL import Image, UnidentifiedImageError
 
 from .config import OGRE_CA, OLD_BAD_OGRE_CA, Settings, load_settings
+from .charts import ChartData, build_chart_image, chart_data_from_ohlcv
 from .db import Database, TraderRecord, period_to_since
 from .dexscreener import DexscreenerClient
 from .extract import extract_ca_like_values, extract_solana_addresses, extract_token_queries, extract_x_post_links, is_solana_address
@@ -43,6 +44,7 @@ from .formatting import (
 from .geckoterminal import GeckoTerminalClient
 from .images import build_pnl_card, build_scan_banner
 from .jupiter import JupiterTokenClient
+from .marketdata import YahooChartClient
 from .models import TokenScan, normalize_media_url
 from .pumpfun import PumpFunClient
 from .rugcheck import RugCheckClient
@@ -59,7 +61,8 @@ class OgreScanApp:
         self.dp = Dispatcher()
         self.db = Database(settings.database_path)
         self.dex = DexscreenerClient()
-        self.gecko = GeckoTerminalClient() if settings.enable_geckoterminal_ath else None
+        self.gecko = GeckoTerminalClient()
+        self.market = YahooChartClient()
         self.rug = RugCheckClient() if settings.enable_rugcheck else None
         self.pump = PumpFunClient() if settings.enable_pump_metadata else None
         self.jupiter = JupiterTokenClient(settings.jupiter_api_key) if settings.enable_jupiter_tokens else None
@@ -89,8 +92,8 @@ class OgreScanApp:
             await self.stop_call_tracker_loop()
             await self.stop_auto_backup_loop()
             await self.dex.close()
-            if self.gecko:
-                await self.gecko.close()
+            await self.gecko.close()
+            await self.market.close()
             if self.rug:
                 await self.rug.close()
             if self.pump:
@@ -149,8 +152,8 @@ class OgreScanApp:
         await self.stop_call_tracker_loop()
         await self.stop_auto_backup_loop()
         await self.dex.close()
-        if self.gecko:
-            await self.gecko.close()
+        await self.gecko.close()
+        await self.market.close()
         if self.rug:
             await self.rug.close()
         if self.pump:
@@ -166,6 +169,7 @@ class OgreScanApp:
         self.dp.message.register(self.help_handler, Command("start", "help"))
         self.dp.message.register(self.set_backup_channel_command, lambda message: is_backup_command(message.text or ""))
         self.dp.message.register(self.scan_command, Command("scan", "call"))
+        self.dp.message.register(self.chart_command, Command("chart"))
         self.dp.message.register(self.smart_intel_command, Command("intel", "explain", "paid", "boosts", "cluster", "whylose"))
         self.dp.message.register(self.pnl_command, Command("pnl", "flex"))
         self.dp.message.register(self.pnl_command, lambda message: is_plain_card_command(message.text or ""))
@@ -253,6 +257,33 @@ class OgreScanApp:
             reply_markup=smart_intel_keyboard(token.address, view),
             disable_web_page_preview=True,
         )
+
+    async def chart_command(self, message: Message) -> None:
+        raw_query = command_arg_text(message)
+        if not raw_query:
+            await message.reply("Send /chart followed by a Solana CA, $ticker, crypto symbol, stock symbol, or company name.")
+            return
+
+        await message.bot.send_chat_action(message.chat.id, "upload_photo")
+        token_query = first_token_query_from_text(raw_query)
+        if token_query and should_try_token_chart(raw_query, token_query):
+            token = await self.resolve_token(token_query, include_paid=False, include_ath=False)
+            if token:
+                sent = await self.send_token_chart(message, token)
+                if sent:
+                    return
+
+        data = await self.market.chart_for_query(raw_query)
+        if data:
+            await self.send_chart_photo(message, data)
+            return
+
+        if token_query:
+            token = await self.resolve_token(token_query, include_paid=False, include_ath=False)
+            if token and await self.send_token_chart(message, token):
+                return
+
+        await message.reply("I could not build a chart for that yet. Try a Solana CA, $ticker, BTC, TSLA, or a company name like Tesla.")
 
     async def pnl_command(self, message: Message) -> None:
         query = first_token_query_from_message(message, include_reply=True)
@@ -461,6 +492,15 @@ class OgreScanApp:
         token = await self.resolve_token(address, include_paid=True, include_ath=include_ath)
         if not token:
             await callback.answer("Could not refresh those links right now.", show_alert=False)
+            return
+
+        if menu == "chartimg":
+            try:
+                sent = await self.send_token_chart(callback.message, token)
+                await callback.answer("Chart image posted." if sent else "No chart candles available yet.", show_alert=False)
+            except Exception:
+                logging.exception("Chart image callback failed.")
+                await callback.answer("Could not post chart image right now.", show_alert=False)
             return
 
         needs_rug = menu in {"security", "exs", "exd", "exr", "exw", "exo", "paid", "cluster", "why", "scan"}
@@ -689,6 +729,49 @@ class OgreScanApp:
         banner = build_scan_banner(token, source)
         return BufferedInputFile(banner.getvalue(), filename=banner.name)
 
+    async def send_token_chart(self, message: Message, token) -> bool:
+        data = await self.token_chart_data(token)
+        if not data:
+            return False
+        await self.send_chart_photo(message, data, token=token)
+        return True
+
+    async def send_chart_photo(self, message: Message, data: ChartData, token=None) -> None:
+        image = build_chart_image(data)
+        photo = BufferedInputFile(image.getvalue(), filename=image.name)
+        await message.reply_photo(
+            photo,
+            caption=chart_caption(data),
+            reply_markup=chart_keyboard(data, token),
+        )
+
+    async def token_chart_data(self, token) -> ChartData | None:
+        if not token.pair_address:
+            return None
+        attempts = [
+            ("minute", 5, 140, "5m"),
+            ("minute", 15, 140, "15m"),
+            ("hour", 1, 140, "1h"),
+        ]
+        for timeframe, aggregate, limit, label in attempts:
+            try:
+                raw = await self.gecko.ohlcv(token.pair_address, timeframe, aggregate, limit)
+            except Exception:
+                logging.exception("GeckoTerminal chart candles failed for %s", token.address)
+                raw = []
+            data = chart_data_from_ohlcv(
+                raw,
+                title=token.name,
+                symbol=f"${token.symbol}",
+                subtitle=f"Solana | {token.dex_id} | {token.address[:6]}...{token.address[-6:]}",
+                source="GeckoTerminal",
+                source_url=token.pair_url or f"https://dexscreener.com/solana/{token.address}",
+                interval=label,
+            )
+            if data:
+                return data
+        return None
+
     async def download_image(self, url: str) -> bytes | None:
         try:
             async with self.dex._session.get(url, headers={"User-Agent": "OgreScanBot/1.0"}) as response:
@@ -799,7 +882,7 @@ class OgreScanApp:
         return resolved
 
     async def enrich_market_data(self, token):
-        if self.gecko:
+        if self.settings.enable_geckoterminal_ath and self.gecko:
             try:
                 token = await self.gecko.enrich_ath(token)
             except Exception:
@@ -1157,6 +1240,14 @@ def command_args(message: Message) -> list[str]:
     return parts[1].split()
 
 
+def command_arg_text(message: Message) -> str:
+    text = message.text or message.caption or ""
+    parts = text.split(maxsplit=1)
+    if len(parts) < 2:
+        return ""
+    return parts[1].strip()
+
+
 def command_name(text: str) -> str:
     first = (text or "").strip().split(maxsplit=1)[0].lower()
     first = first.removeprefix("/")
@@ -1365,6 +1456,33 @@ def first_token_query_from_message(message: Message, include_reply: bool = False
     return None
 
 
+def first_token_query_from_text(text: str | None) -> str | None:
+    queries = extract_token_queries(text or "")
+    if queries:
+        return queries[0]
+    ca_values = extract_ca_like_values(text or "")
+    return ca_values[0] if ca_values else None
+
+
+def should_try_token_chart(raw_query: str, token_query: str) -> bool:
+    clean = (raw_query or "").strip().lower()
+    if is_solana_address(token_query):
+        return True
+    if ca_like_query(raw_query):
+        return True
+    if clean.startswith("$"):
+        return True
+    token_link_hosts = (
+        "dexscreener.com",
+        "dextools.io",
+        "pump.fun",
+        "birdeye.so",
+        "geckoterminal.com",
+        "solscan.io",
+    )
+    return any(host in clean for host in token_link_hosts)
+
+
 def first_ca_like_from_message(message: Message) -> str | None:
     for source in (message.text, message.caption):
         ca_values = extract_ca_like_values(source or "")
@@ -1449,6 +1567,32 @@ def intel_button(label: str, view: str, address: str, active_view: str) -> Inlin
     return InlineKeyboardButton(text=text, callback_data=scan_menu_data(view, address))
 
 
+def chart_caption(data: ChartData) -> str:
+    return (
+        f"<b>Chart</b>\n"
+        f"<b>{html.escape(data.title)} ({html.escape(data.symbol)})</b>\n"
+        f"{html.escape(data.subtitle)}\n"
+        f"Source: <b>{html.escape(data.source)}</b>"
+        f"{powered_by_footer()}"
+    )
+
+
+def chart_keyboard(data: ChartData, token=None) -> InlineKeyboardMarkup | None:
+    rows: list[list[InlineKeyboardButton]] = []
+    if token:
+        add_button_row(
+            rows,
+            [
+                ("Dexscreener", token.pair_url or f"https://dexscreener.com/solana/{token.address}"),
+                ("GeckoTerminal", f"https://www.geckoterminal.com/solana/pools/{token.pair_address or token.address}"),
+            ],
+        )
+        add_button_row(rows, [("OgreTradeBot", "https://t.me/ogretradebot")])
+    elif data.source_url:
+        add_button_row(rows, [("Open Chart", data.source_url)])
+    return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+
+
 def scan_links_keyboard(token, rug=None, menu: str = "main") -> InlineKeyboardMarkup:
     address = token.address
     pair = token.pair_address or token.address
@@ -1459,6 +1603,7 @@ def scan_links_keyboard(token, rug=None, menu: str = "main") -> InlineKeyboardMa
     query = " OR ".join(terms)
 
     if menu == "charts":
+        rows.append([InlineKeyboardButton(text="Chart Image", callback_data=scan_menu_data("chartimg", address))])
         add_button_row(
             rows,
             [
