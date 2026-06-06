@@ -67,18 +67,29 @@ class YahooChartClient:
     async def close(self) -> None:
         await self._session.close()
 
-    async def chart_for_query(self, query: str) -> ChartData | None:
+    async def chart_for_query(
+        self,
+        query: str,
+        timeframe: str = "5m",
+        indicators: list[str] | None = None,
+    ) -> ChartData | None:
         clean = normalize_market_query(query)
         if not clean:
             return None
 
         candidates = await self.symbol_candidates(clean)
         for symbol, display_name, quote_type in candidates:
-            data = await self.chart_for_symbol(symbol, display_name=display_name, quote_type=quote_type)
+            data = await self.chart_for_symbol(
+                symbol,
+                display_name=display_name,
+                quote_type=quote_type,
+                timeframe=timeframe,
+                indicators=indicators,
+            )
             if data:
                 return data
 
-        return await self.coingecko_chart_for_query(clean)
+        return await self.coingecko_chart_for_query(clean, timeframe=timeframe, indicators=indicators)
 
     async def resolve_symbol(self, query: str) -> tuple[str | None, str | None, str | None]:
         candidates = await self.symbol_candidates(query)
@@ -141,18 +152,25 @@ class YahooChartClient:
         symbol: str,
         display_name: str | None = None,
         quote_type: str | None = None,
+        timeframe: str = "5m",
+        indicators: list[str] | None = None,
     ) -> ChartData | None:
         symbol = normalize_market_query(symbol).upper()
         if not symbol:
             return None
 
-        ranges = [
-            ("1d", "5m", "5m"),
-            ("5d", "15m", "15m"),
-            ("1mo", "1h", "1h"),
-        ]
-        for range_value, interval, label in ranges:
-            data = await self._chart(symbol, range_value, interval, label, display_name, quote_type)
+        for range_value, interval, label, source_label, resample_seconds in yahoo_ranges_for_timeframe(timeframe):
+            data = await self._chart(
+                symbol,
+                range_value,
+                interval,
+                label,
+                source_label,
+                resample_seconds,
+                display_name,
+                quote_type,
+                indicators,
+            )
             if data and len(data.candles) >= 2:
                 return data
         return None
@@ -163,8 +181,11 @@ class YahooChartClient:
         range_value: str,
         interval: str,
         label: str,
+        source_label: str,
+        resample_seconds: int | None,
         display_name: str | None,
         quote_type: str | None,
+        indicators: list[str] | None,
     ) -> ChartData | None:
         url = f"{YAHOO_CHART_URL}/{quote(symbol, safe='')}"
         params = {
@@ -204,6 +225,10 @@ class YahooChartClient:
 
         if len(candles) < 2:
             return None
+        if resample_seconds:
+            candles = resample_candles(candles, resample_seconds)
+            if len(candles) < 2:
+                return None
 
         name = (
             display_name
@@ -221,10 +246,17 @@ class YahooChartClient:
             source="Yahoo Finance",
             source_url=source_url,
             interval=label,
+            source_interval=source_label,
+            indicators=indicators or [],
             candles=candles[-160:],
         )
 
-    async def coingecko_chart_for_query(self, query: str) -> ChartData | None:
+    async def coingecko_chart_for_query(
+        self,
+        query: str,
+        timeframe: str = "5m",
+        indicators: list[str] | None = None,
+    ) -> ChartData | None:
         clean = normalize_market_query(query).upper()
         coin_id = COINGECKO_IDS.get(clean)
         if not coin_id and clean.endswith("-USD"):
@@ -233,7 +265,7 @@ class YahooChartClient:
             return None
 
         url = COINGECKO_MARKET_CHART_URL.format(coin_id=coin_id)
-        params = {"vs_currency": "usd", "days": "1"}
+        params = {"vs_currency": "usd", "days": coingecko_days_for_timeframe(timeframe)}
         try:
             async with self._session.get(url, params=params) as response:
                 if response.status >= 400:
@@ -247,7 +279,8 @@ class YahooChartClient:
         if not isinstance(prices, list):
             return None
 
-        candles = coingecko_candles(prices, volumes if isinstance(volumes, list) else [])
+        bucket_seconds = timeframe_seconds(timeframe) or 300
+        candles = coingecko_candles(prices, volumes if isinstance(volumes, list) else [], bucket_seconds=bucket_seconds)
         if len(candles) < 2:
             return None
 
@@ -258,9 +291,117 @@ class YahooChartClient:
             subtitle="CRYPTOCURRENCY | CoinGecko | 1d",
             source="CoinGecko",
             source_url=f"https://www.coingecko.com/en/coins/{coin_id}",
-            interval="5m",
+            interval=timeframe,
+            source_interval="market_chart",
+            indicators=indicators or [],
             candles=candles[-160:],
         )
+
+
+def yahoo_ranges_for_timeframe(timeframe: str) -> list[tuple[str, str, str, str, int | None]]:
+    tf = normalize_timeframe_label(timeframe)
+    direct = {
+        "1m": ("1d", "1m", "1m", "1m", None),
+        "5m": ("5d", "5m", "5m", "5m", None),
+        "15m": ("5d", "15m", "15m", "15m", None),
+        "30m": ("1mo", "30m", "30m", "30m", None),
+        "1h": ("1mo", "60m", "1h", "1h", None),
+        "1d": ("1y", "1d", "1d", "1d", None),
+        "1w": ("2y", "1wk", "1w", "1w", None),
+        "1M": ("5y", "1mo", "1M", "1M", None),
+    }
+    resampled = {
+        "1s": ("1d", "1m", "1s", "1m", None),
+        "5s": ("1d", "1m", "5s", "1m", None),
+        "15s": ("1d", "1m", "15s", "1m", None),
+        "30s": ("1d", "1m", "30s", "1m", None),
+        "3m": ("1d", "1m", "3m", "1m", 180),
+        "45m": ("5d", "15m", "45m", "15m", 2700),
+        "2h": ("1mo", "60m", "2h", "1h", 7200),
+        "3h": ("1mo", "60m", "3h", "1h", 10800),
+        "4h": ("1mo", "60m", "4h", "1h", 14400),
+        "3d": ("1y", "1d", "3d", "1d", 259200),
+    }
+    primary = direct.get(tf) or resampled.get(tf) or direct["5m"]
+    fallbacks = [
+        primary,
+        ("5d", "5m", tf, "5m", timeframe_seconds(tf) if tf not in {"1s", "5s", "15s", "30s"} else None),
+        ("1mo", "60m", tf, "1h", timeframe_seconds(tf) if timeframe_seconds(tf) and timeframe_seconds(tf) >= 3600 else None),
+        ("1y", "1d", tf, "1d", timeframe_seconds(tf) if timeframe_seconds(tf) and timeframe_seconds(tf) >= 86400 else None),
+    ]
+    unique: list[tuple[str, str, str, str, int | None]] = []
+    seen: set[tuple[str, str, int | None]] = set()
+    for item in fallbacks:
+        key = (item[0], item[1], item[4])
+        if key not in seen:
+            unique.append(item)
+            seen.add(key)
+    return unique
+
+
+def normalize_timeframe_label(timeframe: str | None) -> str:
+    raw = str(timeframe or "5m").strip()
+    if raw == "1M":
+        return "1M"
+    lowered = raw.lower()
+    if lowered in {"1mo", "1month", "1month"}:
+        return "1M"
+    return lowered
+
+
+def timeframe_seconds(timeframe: str | None) -> int | None:
+    tf = normalize_timeframe_label(timeframe)
+    if tf.endswith("s"):
+        return _int_or_none(tf[:-1])
+    if tf.endswith("m") and tf != "1M":
+        minutes = _int_or_none(tf[:-1])
+        return minutes * 60 if minutes else None
+    if tf.endswith("h"):
+        hours = _int_or_none(tf[:-1])
+        return hours * 3600 if hours else None
+    if tf.endswith("d"):
+        days = _int_or_none(tf[:-1])
+        return days * 86400 if days else None
+    if tf.endswith("w"):
+        weeks = _int_or_none(tf[:-1])
+        return weeks * 604800 if weeks else None
+    if tf == "1M":
+        return 30 * 86400
+    return None
+
+
+def coingecko_days_for_timeframe(timeframe: str) -> str:
+    seconds = timeframe_seconds(timeframe) or 300
+    if seconds < 86400:
+        return "1"
+    if seconds < 604800:
+        return "30"
+    return "365"
+
+
+def resample_candles(candles: list[ChartCandle], bucket_seconds: int) -> list[ChartCandle]:
+    if bucket_seconds <= 0:
+        return candles
+    grouped: dict[int, list[ChartCandle]] = {}
+    for candle in candles:
+        bucket = (candle.ts // bucket_seconds) * bucket_seconds
+        grouped.setdefault(bucket, []).append(candle)
+    result: list[ChartCandle] = []
+    for bucket in sorted(grouped):
+        group = sorted(grouped[bucket], key=lambda candle: candle.ts)
+        if not group:
+            continue
+        result.append(
+            ChartCandle(
+                ts=bucket,
+                open=group[0].open,
+                high=max(candle.high for candle in group),
+                low=min(candle.low for candle in group),
+                close=group[-1].close,
+                volume=sum(candle.volume for candle in group),
+            )
+        )
+    return result
 
 
 def normalize_market_query(query: str | None) -> str:

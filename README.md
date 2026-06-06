@@ -20,8 +20,10 @@ Solana-first Telegram scanner bot using free/public data sources.
 - Shows `/stats` as a quick trader profile with rank, win rate, best/worst trade, favorite chain, and badges. Stats, Calls, and Group LB switch in-place with buttons.
 - Generates matching call-based PNL/flex cards with `/pnl <ca>`, `/flex <ca>`, `pnl <ca>`, or `flex <ca>`.
 - PNL/flex cards refresh the stored call peak from OHLCV high since the call, then show a big green call-to-ATH X or a big red loss.
-- Posts chart images in-chat with `/chart <ca_or_$ticker_or_stock_or_crypto>`. Solana tokens use free GeckoTerminal candles, while stocks and major crypto symbols/names use free Yahoo Finance chart data.
-- Also accepts plain `chart <symbol>` in chats for the same in-chat image flow.
+- Posts chart images in-chat with `/chart <ticker_or_ca> <timeframe> <indicators>` or `/fc <ticker_or_ca> <timeframe> <indicators>`. Solana tokens use free GeckoTerminal candles, while stocks and major crypto symbols/names use free Yahoo Finance chart data.
+- Also accepts plain `chart <symbol>` and `fc <symbol>` in chats for the same in-chat image flow.
+- Chart timeframes accepted: `1s`, `5s`, `15s`, `30s`, `1m`, `3m`, `5m`, `15m`, `30m`, `45m`, `1h`, `2h`, `3h`, `4h`, `1d`, `3d`, `1w`, `1M`. Free data sources do not always expose true second candles, so second charts use the nearest available free candle source and label the requested timeframe.
+- Chart indicators accepted: `sma`, `ema`, `bb`, `vwap`, `rsi`, `macd`, and `stoch`.
 - Pulls token metadata images/descriptions from Dexscreener and falls back to Pump.fun public metadata when available.
 - Uses Dexscreener pair fallbacks plus Pump.fun cap metadata when Dex does not return market cap/FDV on the selected pair.
 - Shows DEX paid status and RugCheck dev-sold status when free endpoints return it.
@@ -83,8 +85,10 @@ python -m ogrescanbot
 ```text
 /scan <solana_ca_or_link_or_$ticker>
 /call <solana_ca_or_link_or_$ticker>
-/chart <solana_ca_or_$ticker_or_stock_or_crypto>
-chart <solana_ca_or_$ticker_or_stock_or_crypto>
+/chart <solana_ca_or_$ticker_or_stock_or_crypto> <timeframe> <indicators>
+/fc <solana_ca_or_$ticker_or_stock_or_crypto> <timeframe> <indicators>
+chart <solana_ca_or_$ticker_or_stock_or_crypto> <timeframe> <indicators>
+fc <solana_ca_or_$ticker_or_stock_or_crypto> <timeframe> <indicators>
 /intel <solana_ca_or_link_or_$ticker>
 /explain <solana_ca_or_link_or_$ticker>
 /paid <solana_ca_or_link_or_$ticker>

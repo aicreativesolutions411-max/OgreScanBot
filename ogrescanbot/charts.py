@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
@@ -34,6 +34,8 @@ class ChartData:
     source_url: str | None
     interval: str
     candles: list[ChartCandle]
+    indicators: list[str] = field(default_factory=list)
+    source_interval: str | None = None
 
 
 def chart_data_from_ohlcv(
@@ -44,6 +46,8 @@ def chart_data_from_ohlcv(
     source: str,
     source_url: str | None,
     interval: str,
+    indicators: list[str] | None = None,
+    source_interval: str | None = None,
 ) -> ChartData | None:
     candles: list[ChartCandle] = []
     for row in raw_candles:
@@ -80,6 +84,8 @@ def chart_data_from_ohlcv(
         source_url=source_url,
         interval=interval,
         candles=deduped[-160:],
+        indicators=normalize_indicators(indicators),
+        source_interval=source_interval,
     )
 
 
@@ -100,6 +106,7 @@ def build_chart_image(data: ChartData) -> BytesIO:
     oscillator_bottom = 662
 
     candles = data.candles[-120:]
+    flags = indicator_flags(data.indicators)
     prices = [value for candle in candles for value in (candle.high, candle.low) if value > 0]
     if not prices:
         return _empty_chart(data)
@@ -127,8 +134,14 @@ def build_chart_image(data: ChartData) -> BytesIO:
 
     _draw_header(draw, data, last, change, change_pct, accent, soft_accent)
     _draw_candles(draw, candles, chart_left, chart_top, chart_right, price_bottom, price_min, price_max)
+    _draw_overlay_indicators(draw, candles, flags, chart_left, chart_top, chart_right, price_bottom, price_min, price_max)
     _draw_volume(draw, candles, chart_left, volume_top, chart_right, volume_bottom)
-    _draw_momentum(draw, candles, chart_left, oscillator_top, chart_right, oscillator_bottom)
+    if "macd" in flags:
+        _draw_macd(draw, candles, chart_left, oscillator_top, chart_right, oscillator_bottom)
+    elif "rsi" in flags:
+        _draw_rsi(draw, candles, chart_left, oscillator_top, chart_right, oscillator_bottom)
+    else:
+        _draw_momentum(draw, candles, chart_left, oscillator_top, chart_right, oscillator_bottom)
     _draw_price_axis(draw, chart_right, chart_top, price_bottom, price_min, price_max, last.close, accent)
     _draw_time_axis(draw, candles, chart_left, chart_right, price_bottom + 12, volume_top + 12)
     _draw_footer(draw, data, width, height)
@@ -163,7 +176,10 @@ def _draw_header(
     small_font = _font(18)
     title = _shorten(f"{data.title} ({data.symbol})", 42)
     draw.text((36, 25), title, fill="#f5f9ff", font=title_font, anchor="lm")
-    draw.text((36, 55), _shorten(data.subtitle, 74), fill="#9aa9bb", font=meta_font, anchor="lm")
+    indicator_text = indicator_label(data.indicators)
+    source_text = f" | source {data.source_interval}" if data.source_interval and data.source_interval != data.interval else ""
+    subtitle = f"{data.subtitle}{source_text}{indicator_text}"
+    draw.text((36, 55), _shorten(subtitle, 88), fill="#9aa9bb", font=meta_font, anchor="lm")
 
     ohlc = (
         f"O {format_price(last.open)}  H {format_price(last.high)}  "
@@ -239,6 +255,64 @@ def _draw_candles(
         )
 
 
+def _draw_overlay_indicators(
+    draw: ImageDraw.ImageDraw,
+    candles: list[ChartCandle],
+    flags: set[str],
+    left: int,
+    top: int,
+    right: int,
+    bottom: int,
+    price_min: float,
+    price_max: float,
+) -> None:
+    if not candles or not flags:
+        return
+    closes = [candle.close for candle in candles]
+    if "sma" in flags:
+        _draw_indicator_line(draw, candles, moving_average(closes, 20), left, top, right, bottom, price_min, price_max, "#ffd166", 3)
+    if "ema" in flags:
+        _draw_indicator_line(draw, candles, exponential_average(closes, 20), left, top, right, bottom, price_min, price_max, "#5cc8ff", 3)
+    if "vwap" in flags:
+        _draw_indicator_line(draw, candles, vwap_values(candles), left, top, right, bottom, price_min, price_max, "#f59e0b", 3)
+    if "bb" in flags:
+        upper, mid, lower = bollinger_bands(closes, 20, 2.0)
+        _draw_indicator_line(draw, candles, upper, left, top, right, bottom, price_min, price_max, "#b779ff", 2)
+        _draw_indicator_line(draw, candles, mid, left, top, right, bottom, price_min, price_max, "#d8b4fe", 2)
+        _draw_indicator_line(draw, candles, lower, left, top, right, bottom, price_min, price_max, "#b779ff", 2)
+
+
+def _draw_indicator_line(
+    draw: ImageDraw.ImageDraw,
+    candles: list[ChartCandle],
+    values: list[float | None],
+    left: int,
+    top: int,
+    right: int,
+    bottom: int,
+    price_min: float,
+    price_max: float,
+    color: str,
+    width: int,
+) -> None:
+    if len(values) != len(candles) or price_max <= price_min:
+        return
+    chart_width = right - left
+    step = chart_width / max(1, len(candles) - 1)
+    segments: list[tuple[float, float]] = []
+    for index, value in enumerate(values):
+        if value is None:
+            if len(segments) >= 2:
+                draw.line(segments, fill=color, width=width)
+            segments = []
+            continue
+        x = left + step * index
+        y = bottom - ((value - price_min) / (price_max - price_min)) * (bottom - top)
+        segments.append((x, y))
+    if len(segments) >= 2:
+        draw.line(segments, fill=color, width=width)
+
+
 def _draw_volume(
     draw: ImageDraw.ImageDraw,
     candles: list[ChartCandle],
@@ -291,6 +365,51 @@ def _draw_momentum(
         glow = glow.filter(ImageFilter.GaussianBlur(3))
         draw.bitmap((0, 0), glow.split()[-1], fill=(86, 216, 111, 80))
     draw.text((right + 18, (top + bottom) // 2), "50", fill="#9aa9bb", font=_font(16), anchor="lm")
+
+
+def _draw_rsi(
+    draw: ImageDraw.ImageDraw,
+    candles: list[ChartCandle],
+    left: int,
+    top: int,
+    right: int,
+    bottom: int,
+) -> None:
+    values = rsi_values([candle.close for candle in candles], 14)
+    points = panel_points(values, left, top, right, bottom, min_value=0.0, max_value=100.0)
+    if len(points) >= 2:
+        draw.line(points, fill="#a7f3d0", width=3)
+    y70 = bottom - 0.70 * (bottom - top)
+    y30 = bottom - 0.30 * (bottom - top)
+    draw.line((left, y70, right, y70), fill=(255, 209, 102, 90), width=1)
+    draw.line((left, y30, right, y30), fill=(255, 77, 97, 90), width=1)
+    draw.text((left + 14, top + 12), "RSI 14", fill="#a7f3d0", font=_font(16, bold=True), anchor="la")
+    draw.text((right + 18, y70), "70", fill="#9aa9bb", font=_font(16), anchor="lm")
+    draw.text((right + 18, y30), "30", fill="#9aa9bb", font=_font(16), anchor="lm")
+
+
+def _draw_macd(
+    draw: ImageDraw.ImageDraw,
+    candles: list[ChartCandle],
+    left: int,
+    top: int,
+    right: int,
+    bottom: int,
+) -> None:
+    macd, signal = macd_values([candle.close for candle in candles])
+    valid = [value for value in macd + signal if value is not None]
+    if not valid:
+        return
+    max_abs = max(abs(min(valid)), abs(max(valid)), 1e-12)
+    zero_y = bottom - ((0 + max_abs) / (max_abs * 2)) * (bottom - top)
+    draw.line((left, zero_y, right, zero_y), fill=(154, 169, 187, 90), width=1)
+    macd_points = panel_points(macd, left, top, right, bottom, min_value=-max_abs, max_value=max_abs)
+    signal_points = panel_points(signal, left, top, right, bottom, min_value=-max_abs, max_value=max_abs)
+    if len(macd_points) >= 2:
+        draw.line(macd_points, fill="#56d86f", width=3)
+    if len(signal_points) >= 2:
+        draw.line(signal_points, fill="#ffb86b", width=3)
+    draw.text((left + 14, top + 12), "MACD", fill="#a7f3d0", font=_font(16, bold=True), anchor="la")
 
 
 def _draw_price_axis(
@@ -357,6 +476,164 @@ def _empty_chart(data: ChartData) -> BytesIO:
     output.seek(0)
     output.name = "ogrescan-chart.png"
     return output
+
+
+INDICATOR_ALIASES = {
+    "ma": "sma",
+    "sma": "sma",
+    "ema": "ema",
+    "bb": "bb",
+    "boll": "bb",
+    "bollinger": "bb",
+    "bollingerbands": "bb",
+    "vwap": "vwap",
+    "rsi": "rsi",
+    "macd": "macd",
+    "stoch": "stoch",
+    "stochastic": "stoch",
+}
+
+
+def normalize_indicators(indicators: list[str] | None) -> list[str]:
+    normalized: list[str] = []
+    for item in indicators or []:
+        for part in str(item).replace(",", " ").split():
+            key = "".join(char for char in part.lower() if char.isalnum())
+            value = INDICATOR_ALIASES.get(key)
+            if value and value not in normalized:
+                normalized.append(value)
+    return normalized[:5]
+
+
+def indicator_flags(indicators: list[str] | None) -> set[str]:
+    return set(normalize_indicators(indicators))
+
+
+def indicator_label(indicators: list[str] | None) -> str:
+    labels = normalize_indicators(indicators)
+    if not labels:
+        return ""
+    display = {"sma": "SMA", "ema": "EMA", "bb": "BB", "vwap": "VWAP", "rsi": "RSI", "macd": "MACD", "stoch": "Stoch"}
+    return " | " + ",".join(display.get(label, label.upper()) for label in labels)
+
+
+def moving_average(values: list[float], window: int) -> list[float | None]:
+    result: list[float | None] = []
+    running = 0.0
+    for index, value in enumerate(values):
+        running += value
+        if index >= window:
+            running -= values[index - window]
+        if index + 1 < window:
+            result.append(None)
+        else:
+            result.append(running / window)
+    return result
+
+
+def exponential_average(values: list[float], window: int) -> list[float | None]:
+    if not values:
+        return []
+    alpha = 2 / (window + 1)
+    result: list[float | None] = []
+    ema = values[0]
+    for index, value in enumerate(values):
+        ema = (value * alpha) + (ema * (1 - alpha))
+        result.append(None if index + 1 < window else ema)
+    return result
+
+
+def bollinger_bands(values: list[float], window: int, deviation: float) -> tuple[list[float | None], list[float | None], list[float | None]]:
+    middle = moving_average(values, window)
+    upper: list[float | None] = []
+    lower: list[float | None] = []
+    for index, mid in enumerate(middle):
+        if mid is None or index + 1 < window:
+            upper.append(None)
+            lower.append(None)
+            continue
+        sample = values[index - window + 1 : index + 1]
+        variance = sum((value - mid) ** 2 for value in sample) / window
+        band = math.sqrt(variance) * deviation
+        upper.append(mid + band)
+        lower.append(mid - band)
+    return upper, middle, lower
+
+
+def vwap_values(candles: list[ChartCandle]) -> list[float | None]:
+    total_price_volume = 0.0
+    total_volume = 0.0
+    values: list[float | None] = []
+    for candle in candles:
+        typical = (candle.high + candle.low + candle.close) / 3
+        volume = candle.volume or 1.0
+        total_price_volume += typical * volume
+        total_volume += volume
+        values.append(total_price_volume / total_volume if total_volume else None)
+    return values
+
+
+def rsi_values(values: list[float], window: int) -> list[float | None]:
+    if len(values) < 2:
+        return [None for _ in values]
+    result: list[float | None] = [None]
+    gains: list[float] = []
+    losses: list[float] = []
+    for index in range(1, len(values)):
+        delta = values[index] - values[index - 1]
+        gains.append(max(delta, 0.0))
+        losses.append(abs(min(delta, 0.0)))
+        if len(gains) < window:
+            result.append(None)
+            continue
+        avg_gain = sum(gains[-window:]) / window
+        avg_loss = sum(losses[-window:]) / window
+        if avg_loss == 0:
+            result.append(100.0)
+        else:
+            rs = avg_gain / avg_loss
+            result.append(100.0 - (100.0 / (1.0 + rs)))
+    return result
+
+
+def macd_values(values: list[float]) -> tuple[list[float | None], list[float | None]]:
+    ema12 = exponential_average(values, 12)
+    ema26 = exponential_average(values, 26)
+    macd: list[float | None] = []
+    raw_macd: list[float] = []
+    for fast, slow in zip(ema12, ema26):
+        if fast is None or slow is None:
+            macd.append(None)
+            raw_macd.append(0.0)
+        else:
+            value = fast - slow
+            macd.append(value)
+            raw_macd.append(value)
+    signal_raw = exponential_average(raw_macd, 9)
+    signal = [value if m is not None else None for value, m in zip(signal_raw, macd)]
+    return macd, signal
+
+
+def panel_points(
+    values: list[float | None],
+    left: int,
+    top: int,
+    right: int,
+    bottom: int,
+    min_value: float,
+    max_value: float,
+) -> list[tuple[float, float]]:
+    if not values or max_value <= min_value:
+        return []
+    step = (right - left) / max(1, len(values) - 1)
+    points: list[tuple[float, float]] = []
+    for index, value in enumerate(values):
+        if value is None:
+            continue
+        x = left + step * index
+        y = bottom - ((value - min_value) / (max_value - min_value)) * (bottom - top)
+        points.append((x, y))
+    return points
 
 
 def format_price(value: float | None) -> str:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import replace
+from dataclasses import dataclass, replace
 import html
 import logging
 from io import BytesIO
@@ -49,6 +49,13 @@ from .models import TokenScan, normalize_media_url
 from .pumpfun import PumpFunClient
 from .rugcheck import RugCheckClient
 from .solana_rpc import SolanaRpcClient, merge_onchain_security
+
+
+@dataclass(frozen=True)
+class ChartRequest:
+    query: str
+    timeframe: str
+    indicators: list[str]
 
 
 class OgreScanApp:
@@ -169,7 +176,7 @@ class OgreScanApp:
         self.dp.message.register(self.help_handler, Command("start", "help"))
         self.dp.message.register(self.set_backup_channel_command, lambda message: is_backup_command(message.text or ""))
         self.dp.message.register(self.scan_command, Command("scan", "call"))
-        self.dp.message.register(self.chart_command, Command("chart"))
+        self.dp.message.register(self.chart_command, Command("chart", "fc"))
         self.dp.message.register(self.chart_command, lambda message: is_plain_chart_command(message.text or ""))
         self.dp.message.register(self.smart_intel_command, Command("intel", "explain", "paid", "boosts", "cluster", "whylose"))
         self.dp.message.register(self.pnl_command, Command("pnl", "flex"))
@@ -260,31 +267,31 @@ class OgreScanApp:
         )
 
     async def chart_command(self, message: Message) -> None:
-        raw_query = command_arg_text(message)
-        if not raw_query:
-            await message.reply("Send /chart followed by a Solana CA, $ticker, crypto symbol, stock symbol, or company name.")
+        request = parse_chart_request(command_arg_text(message))
+        if not request.query:
+            await message.reply(chart_usage_text())
             return
 
         await message.bot.send_chat_action(message.chat.id, "upload_photo")
-        token_query = first_token_query_from_text(raw_query)
-        if token_query and should_try_token_chart(raw_query, token_query):
+        token_query = first_token_query_from_text(request.query)
+        if token_query and should_try_token_chart(request.query, token_query):
             token = await self.resolve_token(token_query, include_paid=False, include_ath=False)
             if token:
-                sent = await self.send_token_chart(message, token)
+                sent = await self.send_token_chart(message, token, request.timeframe, request.indicators)
                 if sent:
                     return
 
-        data = await self.market.chart_for_query(raw_query)
+        data = await self.market.chart_for_query(request.query, timeframe=request.timeframe, indicators=request.indicators)
         if data:
             await self.send_chart_photo(message, data)
             return
 
         if token_query:
             token = await self.resolve_token(token_query, include_paid=False, include_ath=False)
-            if token and await self.send_token_chart(message, token):
+            if token and await self.send_token_chart(message, token, request.timeframe, request.indicators):
                 return
 
-        await message.reply("I could not build a chart for that yet. Try a Solana CA, $ticker, BTC, TSLA, or a company name like Tesla.")
+        await message.reply("I could not build that chart yet.\n\n" + chart_usage_text())
 
     async def pnl_command(self, message: Message) -> None:
         query = first_token_query_from_message(message, include_reply=True)
@@ -730,8 +737,14 @@ class OgreScanApp:
         banner = build_scan_banner(token, source)
         return BufferedInputFile(banner.getvalue(), filename=banner.name)
 
-    async def send_token_chart(self, message: Message, token) -> bool:
-        data = await self.token_chart_data(token)
+    async def send_token_chart(
+        self,
+        message: Message,
+        token,
+        timeframe: str = "5m",
+        indicators: list[str] | None = None,
+    ) -> bool:
+        data = await self.token_chart_data(token, timeframe=timeframe, indicators=indicators)
         if not data:
             return False
         await self.send_chart_photo(message, data, token=token)
@@ -746,17 +759,17 @@ class OgreScanApp:
             reply_markup=chart_keyboard(data, token),
         )
 
-    async def token_chart_data(self, token) -> ChartData | None:
+    async def token_chart_data(
+        self,
+        token,
+        timeframe: str = "5m",
+        indicators: list[str] | None = None,
+    ) -> ChartData | None:
         if not token.pair_address:
             return None
-        attempts = [
-            ("minute", 5, 140, "5m"),
-            ("minute", 15, 140, "15m"),
-            ("hour", 1, 140, "1h"),
-        ]
-        for timeframe, aggregate, limit, label in attempts:
+        for gecko_timeframe, aggregate, limit, label, source_interval in gecko_chart_attempts(timeframe):
             try:
-                raw = await self.gecko.ohlcv(token.pair_address, timeframe, aggregate, limit)
+                raw = await self.gecko.ohlcv(token.pair_address, gecko_timeframe, aggregate, limit)
             except Exception:
                 logging.exception("GeckoTerminal chart candles failed for %s", token.address)
                 raw = []
@@ -768,6 +781,8 @@ class OgreScanApp:
                 source="GeckoTerminal",
                 source_url=token.pair_url or f"https://dexscreener.com/solana/{token.address}",
                 interval=label,
+                indicators=indicators,
+                source_interval=source_interval,
             )
             if data:
                 return data
@@ -1266,7 +1281,108 @@ def is_plain_chart_command(text: str) -> bool:
     stripped = (text or "").strip()
     if not stripped or stripped.startswith("/"):
         return False
-    return command_name(stripped) == "chart"
+    return command_name(stripped) in {"chart", "fc"}
+
+
+SUPPORTED_CHART_TIMEFRAMES = {
+    "1s",
+    "5s",
+    "15s",
+    "30s",
+    "1m",
+    "3m",
+    "5m",
+    "15m",
+    "30m",
+    "45m",
+    "1h",
+    "2h",
+    "3h",
+    "4h",
+    "1d",
+    "3d",
+    "1w",
+    "1M",
+}
+
+
+def parse_chart_request(raw: str | None) -> ChartRequest:
+    tokens = str(raw or "").strip().split()
+    if not tokens:
+        return ChartRequest("", "5m", [])
+
+    timeframe_index = None
+    timeframe = "5m"
+    for index, token in enumerate(tokens):
+        parsed = normalize_chart_timeframe(token)
+        if parsed:
+            timeframe_index = index
+            timeframe = parsed
+            break
+
+    if timeframe_index is None:
+        query = tokens[0]
+        indicators = tokens[1:]
+    else:
+        query = " ".join(tokens[:timeframe_index]).strip()
+        indicators = tokens[timeframe_index + 1 :]
+
+    return ChartRequest(query=query, timeframe=timeframe, indicators=indicators)
+
+
+def normalize_chart_timeframe(value: str | None) -> str | None:
+    raw = str(value or "").strip()
+    if raw == "1M":
+        return "1M"
+    lowered = raw.lower()
+    aliases = {"1mo": "1M", "1month": "1M", "1mon": "1M"}
+    parsed = aliases.get(lowered, lowered)
+    return parsed if parsed in SUPPORTED_CHART_TIMEFRAMES else None
+
+
+def gecko_chart_attempts(timeframe: str) -> list[tuple[str, int, int, str, str | None]]:
+    tf = normalize_chart_timeframe(timeframe) or "5m"
+    seconds_like = {"1s", "5s", "15s", "30s"}
+    if tf in seconds_like:
+        primary = ("minute", 1, 160, tf, "1m")
+    elif tf.endswith("m"):
+        primary = ("minute", max(1, int(tf[:-1])), 160, tf, tf)
+    elif tf.endswith("h"):
+        primary = ("hour", max(1, int(tf[:-1])), 160, tf, tf)
+    elif tf.endswith("d"):
+        primary = ("day", max(1, int(tf[:-1])), 160, tf, tf)
+    elif tf == "1w":
+        primary = ("day", 7, 160, tf, "7d")
+    elif tf == "1M":
+        primary = ("day", 30, 160, tf, "30d")
+    else:
+        primary = ("minute", 5, 160, "5m", "5m")
+
+    fallbacks = [
+        primary,
+        ("minute", 5, 160, tf, "5m"),
+        ("minute", 15, 160, tf, "15m"),
+        ("hour", 1, 160, tf, "1h"),
+        ("day", 1, 160, tf, "1d"),
+    ]
+    unique: list[tuple[str, int, int, str, str | None]] = []
+    seen: set[tuple[str, int]] = set()
+    for item in fallbacks:
+        key = (item[0], item[1])
+        if key in seen:
+            continue
+        unique.append(item)
+        seen.add(key)
+    return unique
+
+
+def chart_usage_text() -> str:
+    return (
+        "Use: /chart <ticker_or_ca> <timeframe> <indicators>\n"
+        "Also works: /fc BTC 5m rsi, fc $OGRE 15m bb ema, chart TSLA 1h macd\n"
+        "Timeframes: 1s, 5s, 15s, 30s, 1m, 3m, 5m, 15m, 30m, 45m, 1h, 2h, 3h, 4h, 1d, 3d, 1w, 1M\n"
+        "Indicators: sma, ema, bb, vwap, rsi, macd, stoch"
+    )
 
 
 def is_plain_stats_command(text: str) -> bool:
@@ -1576,9 +1692,16 @@ def intel_button(label: str, view: str, address: str, active_view: str) -> Inlin
 
 
 def chart_caption(data: ChartData) -> str:
+    indicator_text = f"\nIndicators: <b>{html.escape(', '.join(data.indicators))}</b>" if data.indicators else ""
+    source_text = (
+        f"\nSource interval: <b>{html.escape(data.source_interval)}</b>"
+        if data.source_interval and data.source_interval != data.interval
+        else ""
+    )
     return (
         f"<b>Chart</b>\n"
         f"<b>{html.escape(data.title)} ({html.escape(data.symbol)})</b>\n"
+        f"Timeframe: <b>{html.escape(data.interval)}</b>{source_text}{indicator_text}\n"
         f"{html.escape(data.subtitle)}\n"
         f"Source: <b>{html.escape(data.source)}</b>"
         f"{powered_by_footer()}"
