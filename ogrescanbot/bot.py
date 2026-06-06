@@ -23,7 +23,7 @@ from .config import OGRE_CA, OLD_BAD_OGRE_CA, Settings, load_settings
 from .charts import ChartData, build_chart_image, chart_data_from_ohlcv
 from .db import Database, TraderRecord, period_to_since
 from .dexscreener import DexscreenerClient
-from .extract import extract_ca_like_values, extract_solana_addresses, extract_token_queries, extract_x_post_links, is_solana_address
+from .extract import extract_solana_addresses, extract_token_queries, extract_x_post_links, is_solana_address
 from .formatting import (
     format_help,
     format_leaderboard,
@@ -214,7 +214,11 @@ class OgreScanApp:
         if text.startswith("/"):
             return
         await self.maybe_embed_x_posts(message)
-        query = first_token_query_from_message(message, include_reply=False)
+        query = first_token_query_from_message(
+            message,
+            include_reply=False,
+            include_tickers=self.settings.auto_scan_tickers,
+        )
         if query:
             await self.scan_and_reply(message, query, auto=True)
 
@@ -1564,28 +1568,28 @@ def token_is_new(token) -> bool:
     return (time.time() - (token.created_at_ms / 1000)) < 86_400
 
 
-def first_token_query_from_message(message: Message, include_reply: bool = False) -> str | None:
+def first_token_query_from_message(
+    message: Message,
+    include_reply: bool = False,
+    include_tickers: bool = True,
+) -> str | None:
     sources = [message.text, message.caption]
     reply = getattr(message, "reply_to_message", None)
     if include_reply and reply:
         sources.extend([reply.text, reply.caption])
 
     for source in sources:
-        queries = extract_token_queries(source or "")
+        queries = extract_token_queries(source or "", include_tickers=include_tickers)
         if queries:
             return queries[0]
-        ca_values = extract_ca_like_values(source or "")
-        if ca_values:
-            return ca_values[0]
     return None
 
 
-def first_token_query_from_text(text: str | None) -> str | None:
-    queries = extract_token_queries(text or "")
+def first_token_query_from_text(text: str | None, include_tickers: bool = True) -> str | None:
+    queries = extract_token_queries(text or "", include_tickers=include_tickers)
     if queries:
         return queries[0]
-    ca_values = extract_ca_like_values(text or "")
-    return ca_values[0] if ca_values else None
+    return None
 
 
 def should_try_token_chart(raw_query: str, token_query: str) -> bool:
@@ -1609,15 +1613,15 @@ def should_try_token_chart(raw_query: str, token_query: str) -> bool:
 
 def first_ca_like_from_message(message: Message) -> str | None:
     for source in (message.text, message.caption):
-        ca_values = extract_ca_like_values(source or "")
-        if ca_values:
-            return ca_values[0]
+        addresses = extract_solana_addresses(source or "")
+        if addresses:
+            return addresses[0]
     return None
 
 
 def ca_like_query(query: str | None) -> str | None:
-    ca_values = extract_ca_like_values(query or "")
-    return ca_values[0] if ca_values else None
+    addresses = extract_solana_addresses(query or "")
+    return addresses[0] if addresses else None
 
 
 def intel_query_from_message(

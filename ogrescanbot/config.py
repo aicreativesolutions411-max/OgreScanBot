@@ -25,6 +25,7 @@ class Settings:
     enable_jupiter_tokens: bool
     jupiter_api_key: str
     strict_auto_scan_filter: bool
+    auto_scan_tickers: bool
     run_mode: str
     webhook_url: str
     webhook_path: str
@@ -74,6 +75,7 @@ def load_settings() -> Settings:
         enable_jupiter_tokens=os.getenv("ENABLE_JUPITER_TOKENS", "true").lower() in {"1", "true", "yes", "on"},
         jupiter_api_key=os.getenv("JUPITER_API_KEY", "").strip(),
         strict_auto_scan_filter=os.getenv("STRICT_AUTO_SCAN_FILTER", "true").lower() in {"1", "true", "yes", "on"},
+        auto_scan_tickers=os.getenv("AUTO_SCAN_TICKERS", "false").lower() in {"1", "true", "yes", "on"},
         run_mode=os.getenv("RUN_MODE", "polling").strip().lower() or "polling",
         webhook_url=webhook_url,
         webhook_path=webhook_path,
