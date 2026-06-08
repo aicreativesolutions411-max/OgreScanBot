@@ -4,7 +4,7 @@ Solana-first Telegram scanner bot using free/public data sources.
 
 ## What it does
 
-- Auto-detects Solana contract addresses and supported token links in normal group chat.
+- Auto-detects Solana contract addresses, supported token links, and `$ticker` mentions in group chats.
 - Scans tokens with Dexscreener.
 - Uses exact ticker aliases before search, so `$OGRE` resolves to the official OgreCoin contract.
 - Resolves `$ticker` scans through safer ranking: Jupiter verified/popular tokens when configured, then exact Dexscreener ticker candidates ranked by MC, liquidity, age, socials, and volume.
@@ -32,10 +32,9 @@ Solana-first Telegram scanner bot using free/public data sources.
 - Adds Smart Token Intelligence: explain modes, paid trend check, cautious wallet cluster read, and explain-my-loss views.
 - Scan captions use compact icon sections for token stats, socials, audit, and calls, with categorized button menus for Smart Intel, charts, X links, security, socials, and trade tools. The trade menu includes OgreTradeBot.
 - Scan posts keep the CA as copyable code text and put a fast `Dexscreener` button first.
-- Auto-scan only reads the new message text/caption, so replying to an old CA does not trigger a scan unless the reply itself includes a CA or supported token link.
+- Auto-scan only reads the new message text/caption, so replying to an old CA does not trigger a scan unless the reply itself includes a `$ticker` or CA.
 - Valid Solana CAs always post. If Dexscreener/Pump.fun have not indexed the mint yet, the bot sends a fallback scan with the CA, links, and audit buttons instead of going silent.
-- `$ticker` scans still work through explicit commands like `/scan $OGRE`, but normal chat auto-scan keeps tickers off by default to avoid spam from casual ticker-like words.
-- `$ticker` command scans prefer Dexscreener's best exact-symbol Solana market by MC, liquidity, volume, transactions, boosts, and age. Safety signals are used to demote obvious duplicate junk, not to hide valid low-MC/new pairs.
+- `$ticker` scans prefer Dexscreener's best exact-symbol Solana market by MC, liquidity, volume, transactions, boosts, and age. Safety signals are used to demote obvious duplicate junk, not to hide valid low-MC/new pairs.
 - `TICKER_ALIASES` is optional and blank by default. Only set it when you intentionally want one ticker to force one mint instead of using market-first ranking.
 - Adds quick links for BubbleMaps, RugCheck, Pump.fun, GMGN, DEX, and X searches for high-engagement recent posts.
 - Adds SafeScan ranking/warnings with `/safescan on`. Found CA/$ticker scans still post, including low-MC Pump coins; SafeScan only helps rank duplicate tickers and keeps risks visible in the scan/audit.
@@ -120,7 +119,7 @@ leaderboard
 ## Caller rules
 
 - First person to paste a token address or supported link in a chat owns that call for that chat.
-- First person to run an explicit `$ticker` scan, such as `/scan $OGRE`, also owns that call for that chat.
+- First person to paste a `$ticker` that resolves to a Solana token also owns that call for that chat.
 - Every chat has its own call table and leaderboard.
 - Leaderboard ranking is by highest recorded multiplier on one call.
 - A hit is any call that reaches `MIN_MULTIPLE_FOR_HIT`, default `2.0x`.
@@ -136,7 +135,6 @@ RUN_MODE=webhook
 WEBHOOK_URL=https://your-render-service.onrender.com
 WEBHOOK_PATH=/telegram/webhook
 KEEP_ALIVE_INTERVAL_SECONDS=600
-AUTO_SCAN_TICKERS=false
 ```
 
 Then open `https://your-render-service.onrender.com/healthz`. It should show `"keep_alive":{"enabled":true,...}` and `"interval_seconds":600`.

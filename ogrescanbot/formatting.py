@@ -102,14 +102,14 @@ def format_scan_caption(
     ath = token_ath_value(token, call)
     quick_links = scan_quick_links(token)
     header_call = (
-        f"├ 🧌 {html.escape(status)} by {caller}"
+        f"├ 🧌 {html.escape(status)} by {caller} at MC <b>{called_at}</b>"
         if call
         else f"├ 🧌 Posted by {caller}"
     )
     call_section = (
         f"🧌 <b>Call</b>\n"
-        f"├ {html.escape(status)} by {caller}\n"
-        f"├ Entry MC <b>{called_at}</b> | Now <b>{now}</b>\n"
+        f"├ {html.escape(status)} by {caller} at MC <b>{called_at}</b>\n"
+        f"├ Now MC <b>{now}</b>\n"
         f"└ ATH since call <b>{best}</b> ({multiple_pct(call.peak_multiple if call else None)}) | "
         f"Current <b>{current}</b> ({multiple_pct(current_value)})"
         if call

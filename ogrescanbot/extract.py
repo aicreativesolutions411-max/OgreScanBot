@@ -77,11 +77,8 @@ def extract_ticker_queries(text: str | None) -> list[str]:
     return unique
 
 
-def extract_token_queries(text: str | None, include_tickers: bool = True) -> list[str]:
-    queries = extract_solana_addresses(text)
-    if include_tickers:
-        queries.extend(extract_ticker_queries(text))
-    return queries
+def extract_token_queries(text: str | None) -> list[str]:
+    return extract_solana_addresses(text) + extract_ticker_queries(text)
 
 
 def is_solana_address(value: str | None) -> bool:
