@@ -91,65 +91,29 @@ def format_scan_caption(
     rug: RugSummary | None = None,
     posted_user_id: int | None = None,
     posted_name: str | None = None,
+    migration_event: bool = False,
+    migrated: bool = False,
 ) -> str:
-    status = "New first call" if is_new_call else "First called"
     caller = caller_profile_link(call) if call else telegram_user_link(posted_user_id, posted_name)
-    called_at = money(call.initial_cap) if call else "n/a"
-    now = money(call.last_cap) if call else money(token.cap_for_tracking)
-    best = f"{call.peak_multiple:.2f}x" if call else "n/a"
-    current_value = current_multiple(call)
-    current = f"{current_value:.2f}x" if current_value is not None else "n/a"
-    ath = token_ath_value(token, call)
-    quick_links = scan_quick_links(token)
-    header_call = (
-        f"├ 🧌 {html.escape(status)} by {caller} at MC <b>{called_at}</b>"
-        if call
-        else f"├ 🧌 Posted by {caller}"
-    )
-    call_section = (
-        f"🧌 <b>Call</b>\n"
-        f"├ {html.escape(status)} by {caller} at MC <b>{called_at}</b>\n"
-        f"├ Now MC <b>{now}</b>\n"
-        f"└ ATH since call <b>{best}</b> ({multiple_pct(call.peak_multiple if call else None)}) | "
-        f"Current <b>{current}</b> ({multiple_pct(current_value)})"
-        if call
-        else (
-            "🧌 <b>Call</b>\n"
-            f"└ CA posted by {caller}. X tracking starts once MC/FDV is available."
-        )
-    )
-    stats = [
-        "📊 <b>Token Stats</b>",
-        f"├ MC:   <b>{money(token.market_cap or token.fdv)}</b>",
-        f"├ ATH:  <b>{ath}</b>",
-        f"├ USD:  <b>{price(token.price_usd)}</b> ({pct(token.price_change_h24)})",
-        f"├ LIQ:  <b>{money(token.liquidity_usd)}</b>",
-        f"├ VOL:  <b>{money(token.volume_h24)}</b> (24h)",
-        f"├ SUP:  <b>{supply_value(token)}</b>",
-        f"├ 1H:   <b>B {token.buys_h1 or 0} / S {token.sells_h1 or 0}</b> ({pct(token.price_change_h1)})",
-    ]
-    stats.extend(
-        [
-            f"├ P:    {pair_click_link(token)}",
-            f"└ CA:   {ca_click_link(token)}",
-        ]
-    )
-
+    status_bits = []
+    if migration_event:
+        status_bits.append("MIGRATED")
+    elif migrated:
+        status_bits.append("MIGRATED")
+    if token.dex_paid:
+        status_bits.append("#DEXPAID")
+    elif token.dex_id and token.dex_id != "?":
+        status_bits.append(f"#{html.escape(token.dex_id.upper())}")
+    status = " • ".join(status_bits) if status_bits else "#SOL"
+    call_line = compact_call_line(call, caller, is_new_call, token.cap_for_tracking)
+    headline_symbol = html.escape(token.symbol if token.symbol and token.symbol != "?" else token.name)
     return (
-        f"<b>OgreScanBot</b>\n"
-        f"🧬 <b>{html.escape(token.name)} (${html.escape(token.symbol)})</b>\n"
-        f"{ca_click_link(token, full=True)}\n"
-        f"├ {quick_links}\n"
-        f"{header_call}\n"
-        f"└ 🌱 #SOL • {html.escape(token.dex_id)} • {age_from_ms(token.created_at_ms)}\n\n"
-        f"{chr(10).join(stats)}\n\n"
-        f"🔗 <b>Socials</b>\n"
-        f"└ {scan_social_links(token)}\n\n"
-        f"🛡 <b>Audit</b> <b>{audit_badge(rug)}</b>\n"
-        f"{audit_status(token, rug)}\n\n"
-        f"{call_section}\n\n"
-        f"🔎 <b>Links</b>\n"
-        f"└ Tap a button below for explain, paid trend, wallet map, charts, trade, security, X, and socials."
+        f"🦅 <b>{headline_symbol}</b> • {status}\n"
+        f"➰ MC: <b>{money(token.market_cap or token.fdv)}</b> • Age: {age_from_ms(token.created_at_ms)}\n"
+        f"{call_line}\n\n"
+        f"{ca_click_link(token, full=True)}\n\n"
+        f"{compact_chart_links(token)}\n\n"
+        f"{compact_trade_links(token)}"
         f"{powered_by_footer()}"
     )
 
@@ -998,6 +962,21 @@ def age_from_seconds(seconds: int | None) -> str:
     return f"{seconds // 86400}d"
 
 
+def short_duration(seconds: int | None) -> str:
+    seconds = max(0, int(seconds or 0))
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m"
+    if seconds < 86400:
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        return f"{hours}h {minutes}m" if minutes else f"{hours}h"
+    days = seconds // 86400
+    hours = (seconds % 86400) // 3600
+    return f"{days}d {hours}h" if hours else f"{days}d"
+
+
 def short_address(address: str, left: int = 4, right: int = 4) -> str:
     clean = str(address or "").strip()
     if len(clean) <= left + right + 3:
@@ -1122,6 +1101,65 @@ def dex_click_link(token: TokenScan, label: str = "Dexscreener") -> str:
 
 def dexscreener_url(token: TokenScan) -> str:
     return html.escape(token.pair_url or f"https://dexscreener.com/solana/{token.address}")
+
+
+def compact_call_line(
+    call: CallRecord | None,
+    caller: str,
+    is_new_call: bool,
+    current_cap: float | None,
+) -> str:
+    if not call:
+        return f"➰ Posted by {caller} • tracking starts when MC is available"
+
+    age = short_duration(max(0, int(time.time()) - call.created_at))
+    initial = money(call.initial_cap)
+    current = current_cap or call.last_cap
+    current_x = (current / call.initial_cap) if call.initial_cap and current else current_multiple(call)
+    pct_text = multiple_pct(current_x)
+    x_text = f"{current_x:.2f}x" if current_x is not None else "n/a"
+    if is_new_call:
+        return f"➰ {caller} @ {initial} [new call] ({age})"
+    return f"➰ {caller} @ {initial} [{pct_text} | {x_text}] ({age})"
+
+
+def compact_chart_links(token: TokenScan) -> str:
+    address = html.escape(token.address)
+    pair = html.escape(token.pair_address or token.address)
+    dex_url = dexscreener_url(token)
+    dextools = f"https://www.dextools.io/app/en/solana/pair-explorer/{pair}"
+    gecko = f"https://www.geckoterminal.com/solana/pools/{pair}"
+    mobula = f"https://mobula.io/asset/{address}"
+    birdeye = f"https://birdeye.so/token/{address}?chain=solana"
+    x_url = f"https://x.com/search?q={quote_plus(token.address + ' OR $' + token.symbol)}&src=typed_query&f=live"
+    return (
+        f"<a href=\"{dex_url}\">DEX</a>•"
+        f"<a href=\"{html.escape(dextools)}\">DEF</a>•"
+        f"<a href=\"{html.escape(gecko)}\">GT</a>•"
+        f"<a href=\"{html.escape(mobula)}\">MOB</a>•"
+        f"<a href=\"{html.escape(birdeye)}\">EXP</a>•"
+        f"<a href=\"{html.escape(x_url)}\">𝕏s</a>"
+    )
+
+
+def compact_trade_links(token: TokenScan) -> str:
+    address = html.escape(token.address)
+    pair = html.escape(token.pair_address or token.address)
+    return (
+        f"<a href=\"https://t.me/ogretradebot\">TRT</a>•"
+        f"<a href=\"https://t.me/ogretradebot\">TRO</a>•"
+        f"<a href=\"https://axiom.trade/t/{address}\">AXI</a>•"
+        f"<a href=\"https://photon-sol.tinyastro.io/en/lp/{pair}\">PHO</a>•"
+        f"<a href=\"https://gmgn.ai/sol/token/{address}\">GM</a>•"
+        f"<a href=\"https://pump.fun/coin/{address}\">PDR</a>•"
+        f"<a href=\"https://app.bubblemaps.io/sol/token/{address}\">BLO</a>\n"
+        f"<a href=\"https://www.okx.com/web3/dex-swap\">OKX</a>•"
+        f"<a href=\"https://maestro.io/\">MAE</a>•"
+        f"<a href=\"https://banana-gun.io/\">BAN</a>•"
+        f"<a href=\"https://solscan.io/token/{address}\">STB</a>•"
+        f"<a href=\"https://jup.ag/swap/SOL-{address}\">MVX</a>•"
+        f"<a href=\"https://birdeye.so/token/{address}?chain=solana\">BNK</a>"
+    )
 
 
 def scan_quick_links(token: TokenScan) -> str:

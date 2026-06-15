@@ -496,7 +496,7 @@ class OgreScanApp:
         except ValueError:
             await callback.answer()
             return
-        include_ath = menu in {"exs", "exd", "exr", "exw", "exo", "paid", "cluster", "why", "scan"}
+        include_ath = menu in {"dm", "exs", "exd", "exr", "exw", "exo", "paid", "cluster", "why", "scan", "refresh"}
         token = await self.resolve_token(address, include_paid=True, include_ath=include_ath)
         if not token:
             await callback.answer("Could not refresh those links right now.", show_alert=False)
@@ -511,9 +511,67 @@ class OgreScanApp:
                 await callback.answer("Could not post chart image right now.", show_alert=False)
             return
 
-        needs_rug = menu in {"security", "exs", "exd", "exr", "exw", "exo", "paid", "cluster", "why", "scan"}
+        needs_rug = menu in {"dm", "security", "exs", "exd", "exr", "exw", "exo", "paid", "cluster", "why", "scan", "refresh"}
         rug = await self.safe_rug_summary(token.address) if needs_rug else None
         rug = await self.enrich_security_data(token, rug) if needs_rug else rug
+        if menu == "refresh":
+            try:
+                call = await self.refresh_call_for_scan(callback.message.chat.id, token)
+                migration_event = await self.update_migration_state(callback.message.chat.id, token)
+                try:
+                    await self.db.add_token_snapshot(callback.message.chat.id, token, snapshot_holder_count(rug))
+                except Exception:
+                    logging.exception("Token snapshot save failed; continuing refresh.")
+                caption = photo_caption(
+                    format_scan_caption(
+                        token,
+                        call,
+                        False,
+                        rug,
+                        migration_event=migration_event,
+                        migrated=token_is_migrated(token),
+                    ),
+                    limit=850,
+                )
+                markup = scan_links_keyboard(token, rug)
+                if getattr(callback.message, "photo", None):
+                    await callback.message.edit_caption(caption=caption, reply_markup=markup)
+                else:
+                    await callback.message.edit_text(caption, reply_markup=markup, disable_web_page_preview=True)
+                await callback.answer("Refreshed.", show_alert=False)
+            except TelegramBadRequest as exc:
+                if "message is not modified" in str(exc).lower():
+                    await callback.answer("Already current.", show_alert=False)
+                    return
+                logging.exception("Scan refresh failed.")
+                await callback.answer("Could not refresh right now.", show_alert=False)
+            except Exception:
+                logging.exception("Scan refresh failed.")
+                await callback.answer("Could not refresh right now.", show_alert=False)
+            return
+
+        if menu in {"dm", "exs", "exd", "exr", "exw", "exo", "paid", "cluster", "why"}:
+            try:
+                call = await self.db.get_call(callback.message.chat.id, token.address)
+                first_snapshot, latest_snapshot = await self.db.token_snapshot_range(callback.message.chat.id, token.address)
+                if menu == "dm":
+                    text = format_scan(token, call, False, rug)
+                else:
+                    text = await self.smart_intel_text(
+                        callback.message.chat.id,
+                        token,
+                        rug,
+                        call,
+                        menu,
+                        first_snapshot=first_snapshot,
+                        latest_snapshot=latest_snapshot,
+                    )
+                await self.send_callback_dm(callback, text, token.address)
+            except Exception:
+                logging.exception("DM detail send failed.")
+                await callback.answer("Could not send details right now.", show_alert=False)
+            return
+
         if menu in {"exs", "exd", "exr", "exw", "exo", "paid", "cluster", "why", "scan"}:
             call = await self.db.get_call(callback.message.chat.id, token.address)
             first_snapshot, latest_snapshot = await self.db.token_snapshot_range(callback.message.chat.id, token.address)
@@ -704,6 +762,7 @@ class OgreScanApp:
             await self.db.add_token_snapshot(message.chat.id, token, snapshot_holder_count(rug))
         except Exception:
             logging.exception("Token snapshot save failed; continuing scan.")
+        migration_event = await self.update_migration_state(message.chat.id, token)
         scan_text = photo_caption(
             format_scan_caption(
                 token,
@@ -712,8 +771,10 @@ class OgreScanApp:
                 rug,
                 posted_user_id=caller_id,
                 posted_name=caller_name,
+                migration_event=migration_event,
+                migrated=token_is_migrated(token),
             ),
-            limit=1000,
+            limit=850,
         )
         banner = await self.build_scan_photo(token)
         links = scan_links_keyboard(token, rug)
@@ -727,6 +788,62 @@ class OgreScanApp:
             except Exception:
                 logging.exception("Safe scan photo send failed; falling back to text reply.")
                 await message.reply(safe_caption, parse_mode=None, reply_markup=links, disable_web_page_preview=True)
+
+    async def refresh_call_for_scan(self, chat_id: int, token) -> object | None:
+        call = await self.db.get_call(chat_id, token.address)
+        if not call:
+            return None
+        if not token.cap_for_tracking:
+            return call
+        updated, _ = await self.db.upsert_call(chat_id, token, call.caller_user_id, call.caller_name)
+        return await self.refresh_call_peak_from_ath(token, updated)
+
+    async def send_callback_dm(self, callback: CallbackQuery, text: str, address: str) -> None:
+        if not callback.from_user:
+            await callback.answer("Could not identify your user.", show_alert=False)
+            return
+        try:
+            await self.bot.send_message(
+                callback.from_user.id,
+                text,
+                reply_markup=smart_intel_keyboard(address),
+                disable_web_page_preview=True,
+            )
+            await callback.answer("Sent details in DM.", show_alert=False)
+        except TelegramBadRequest:
+            bot_username = self.settings.bot_name.lstrip("@")
+            await callback.answer(
+                f"Start @{bot_username} in DM first, then tap Details DM again.",
+                show_alert=True,
+            )
+
+    async def update_migration_state(self, chat_id: int, token) -> bool:
+        current = "migrated" if token_is_migrated(token) else "bonding"
+        key = migration_setting_key(chat_id, token.address)
+        previous = await self.db.get_setting(key)
+        await self.db.set_setting(key, current)
+        return bool(previous and previous != "migrated" and current == "migrated")
+
+    async def send_migration_alert(self, chat_id: int, token, call) -> None:
+        rug = await self.safe_rug_summary(token.address)
+        rug = await self.enrich_security_data(token, rug)
+        text = format_scan_caption(
+            token,
+            call,
+            False,
+            rug,
+            migration_event=True,
+            migrated=True,
+        )
+        try:
+            await self.bot.send_message(
+                chat_id,
+                text,
+                reply_markup=scan_links_keyboard(token, rug),
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            logging.exception("Migration alert failed for %s", token.address)
 
     async def build_scan_photo(self, token) -> BufferedInputFile:
         source = None
@@ -1033,7 +1150,7 @@ class OgreScanApp:
         changed = 0
         for record in calls:
             try:
-                token = await self.resolve_token(record.token_address, include_paid=False, include_ath=True)
+                token = await self.resolve_token(record.token_address, include_paid=True, include_ath=True)
                 if not token or not token.cap_for_tracking:
                     continue
                 updated, _ = await self.db.upsert_call(
@@ -1043,6 +1160,9 @@ class OgreScanApp:
                     record.caller_name,
                 )
                 updated = await self.refresh_call_peak_from_ath(token, updated)
+                migration_event = await self.update_migration_state(record.chat_id, token)
+                if migration_event:
+                    await self.send_migration_alert(record.chat_id, token, updated)
                 if updated.last_cap != record.last_cap or updated.peak_multiple != record.peak_multiple:
                     changed += 1
             except Exception:
@@ -1558,6 +1678,21 @@ def strict_scan_rejection(token, rug, auto: bool = False) -> str | None:
     return None
 
 
+def token_is_migrated(token) -> bool:
+    if getattr(token, "is_pump_complete", None) is True:
+        return True
+    dex_id = str(getattr(token, "dex_id", "") or "").strip().lower()
+    address = str(getattr(token, "address", "") or "")
+    has_pair = bool(getattr(token, "pair_address", "") or "")
+    if address.endswith("pump") and has_pair and dex_id not in {"", "?", "pump"}:
+        return True
+    return False
+
+
+def migration_setting_key(chat_id: int, address: str) -> str:
+    return f"migration:{chat_id}:{address}"
+
+
 def token_is_new(token) -> bool:
     if not token.created_at_ms:
         return False
@@ -1753,6 +1888,23 @@ def scan_links_keyboard(token, rug=None, menu: str = "main") -> InlineKeyboardMa
         add_back_row(rows, address)
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
+    if menu == "links":
+        rows.append(
+            [
+                InlineKeyboardButton(text="Charts", callback_data=scan_menu_data("charts", address)),
+                InlineKeyboardButton(text="Security", callback_data=scan_menu_data("security", address)),
+                InlineKeyboardButton(text="X Links", callback_data=scan_menu_data("x", address)),
+            ]
+        )
+        rows.append(
+            [
+                InlineKeyboardButton(text="Socials", callback_data=scan_menu_data("socials", address)),
+                InlineKeyboardButton(text="Trade", callback_data=scan_menu_data("trade", address)),
+            ]
+        )
+        add_back_row(rows, address)
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
     if menu == "x":
         add_button_row(
             rows,
@@ -1821,28 +1973,20 @@ def scan_links_keyboard(token, rug=None, menu: str = "main") -> InlineKeyboardMa
 
     rows.append(
         [
+            InlineKeyboardButton(text="Refresh", callback_data=scan_menu_data("refresh", address)),
+            InlineKeyboardButton(text="Details DM", callback_data=scan_menu_data("dm", address)),
+        ]
+    )
+    rows.append(
+        [
             InlineKeyboardButton(text="Dexscreener", url=token.pair_url or f"https://dexscreener.com/solana/{address}"),
-        ]
-    )
-    rows.append(
-        [
-            InlineKeyboardButton(text="Explain", callback_data=scan_menu_data("exs", address)),
-            InlineKeyboardButton(text="Paid Trend", callback_data=scan_menu_data("paid", address)),
-            InlineKeyboardButton(text="Wallet Map", callback_data=scan_menu_data("cluster", address)),
-        ]
-    )
-    rows.append(
-        [
-            InlineKeyboardButton(text="Loss Check", callback_data=scan_menu_data("why", address)),
-            InlineKeyboardButton(text="Charts", callback_data=scan_menu_data("charts", address)),
+            InlineKeyboardButton(text="Chart", callback_data=scan_menu_data("chartimg", address)),
             InlineKeyboardButton(text="Trade", callback_data=scan_menu_data("trade", address)),
         ]
     )
     rows.append(
         [
-            InlineKeyboardButton(text="Security", callback_data=scan_menu_data("security", address)),
-            InlineKeyboardButton(text="X Links", callback_data=scan_menu_data("x", address)),
-            InlineKeyboardButton(text="Socials", callback_data=scan_menu_data("socials", address)),
+            InlineKeyboardButton(text="Links", callback_data=scan_menu_data("links", address)),
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
