@@ -31,11 +31,12 @@ Solana-first Telegram scanner bot using free/public data sources.
 - Adds an Explain button on every scan for a quick human-readable token risk read using free scan and RugCheck data.
 - Adds Smart Token Intelligence: explain modes, paid trend check, cautious wallet cluster read, and explain-my-loss views.
 - Group scan captions now use a compact Phanes/Rick-style layout: token, MC/age, first caller entry, current X/loss, CA, and compact chart/trade link rows.
-- Bulky scan details are available through the `Details DM` button instead of expanding inside group chat.
+- Bulky scan details are available through the scan `DM` button instead of expanding inside group chat.
 - Scan posts include a `Refresh` button that edits the existing post with current MC, caller X/loss, paid status, and migration state.
 - Tracked Pump tokens record bonding/migrated state and post a compact `MIGRATED` alert when a previously tracked token migrates.
-- Categorized button menus remain available for charts, X links, security, socials, and trade tools. The trade menu includes OgreTradeBot.
-- Scan posts keep the CA as copyable code text and put a fast `Dexscreener` button first.
+- Scan posts use a compact `Refresh | Menu | DM` button row. `Menu` edits the same post's buttons into categories for charts, X links, security, socials, intel, and trade tools.
+- Menu chart images are sent to the tapper's DM to avoid group spam. Explicit `/chart` and `/fc` commands still post chart images in chat.
+- Scan posts keep the CA as copyable code text and include fast text links for DEX/chart/trade tools in the caption.
 - Auto-scan only reads the new message text/caption, so replying to an old CA does not trigger a scan unless the reply itself includes a `$ticker` or CA.
 - Valid Solana CAs always post. If Dexscreener/Pump.fun have not indexed the mint yet, the bot sends a fallback scan with the CA, links, and audit buttons instead of going silent.
 - `$ticker` scans prefer Dexscreener's best exact-symbol Solana market by MC, liquidity, volume, transactions, boosts, and age. Safety signals are used to demote obvious duplicate junk, not to hide valid low-MC/new pairs.

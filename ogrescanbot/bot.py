@@ -504,11 +504,17 @@ class OgreScanApp:
 
         if menu == "chartimg":
             try:
-                sent = await self.send_token_chart(callback.message, token)
-                await callback.answer("Chart image posted." if sent else "No chart candles available yet.", show_alert=False)
+                sent = await self.send_token_chart_dm(callback, token)
+                await callback.answer("Sent chart in DM." if sent else "No chart candles available yet.", show_alert=False)
+            except TelegramBadRequest:
+                bot_username = self.settings.bot_name.lstrip("@")
+                await callback.answer(
+                    f"Start @{bot_username} in DM first, then tap Chart Pic again.",
+                    show_alert=True,
+                )
             except Exception:
                 logging.exception("Chart image callback failed.")
-                await callback.answer("Could not post chart image right now.", show_alert=False)
+                await callback.answer("Could not send chart right now.", show_alert=False)
             return
 
         needs_rug = menu in {"dm", "security", "exs", "exd", "exr", "exw", "exo", "paid", "cluster", "why", "scan", "refresh"}
@@ -813,7 +819,7 @@ class OgreScanApp:
         except TelegramBadRequest:
             bot_username = self.settings.bot_name.lstrip("@")
             await callback.answer(
-                f"Start @{bot_username} in DM first, then tap Details DM again.",
+                f"Start @{bot_username} in DM first, then tap DM again.",
                 show_alert=True,
             )
 
@@ -865,6 +871,28 @@ class OgreScanApp:
         if not data:
             return False
         await self.send_chart_photo(message, data, token=token)
+        return True
+
+    async def send_token_chart_dm(
+        self,
+        callback: CallbackQuery,
+        token,
+        timeframe: str = "5m",
+        indicators: list[str] | None = None,
+    ) -> bool:
+        if not callback.from_user:
+            return False
+        data = await self.token_chart_data(token, timeframe=timeframe, indicators=indicators)
+        if not data:
+            return False
+        image = build_chart_image(data)
+        photo = BufferedInputFile(image.getvalue(), filename=image.name)
+        await self.bot.send_photo(
+            callback.from_user.id,
+            photo,
+            caption=chart_caption(data),
+            reply_markup=chart_keyboard(data, token),
+        )
         return True
 
     async def send_chart_photo(self, message: Message, data: ChartData, token=None) -> None:
@@ -1815,7 +1843,7 @@ def smart_intel_keyboard(address: str, active_view: str = "exs") -> InlineKeyboa
         ],
         [
             intel_button("Loss Check", "why", address, active_view),
-            InlineKeyboardButton(text="← Back to Scan", callback_data=scan_menu_data("scan", address)),
+            InlineKeyboardButton(text="< Back", callback_data=scan_menu_data("scan", address)),
         ],
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -1869,7 +1897,7 @@ def scan_links_keyboard(token, rug=None, menu: str = "main") -> InlineKeyboardMa
     query = " OR ".join(terms)
 
     if menu == "charts":
-        rows.append([InlineKeyboardButton(text="Chart Image", callback_data=scan_menu_data("chartimg", address))])
+        rows.append([InlineKeyboardButton(text="Chart Pic DM", callback_data=scan_menu_data("chartimg", address))])
         add_button_row(
             rows,
             [
@@ -1892,14 +1920,15 @@ def scan_links_keyboard(token, rug=None, menu: str = "main") -> InlineKeyboardMa
         rows.append(
             [
                 InlineKeyboardButton(text="Charts", callback_data=scan_menu_data("charts", address)),
-                InlineKeyboardButton(text="Security", callback_data=scan_menu_data("security", address)),
-                InlineKeyboardButton(text="X Links", callback_data=scan_menu_data("x", address)),
+                InlineKeyboardButton(text="Safe", callback_data=scan_menu_data("security", address)),
+                InlineKeyboardButton(text="X", callback_data=scan_menu_data("x", address)),
             ]
         )
         rows.append(
             [
                 InlineKeyboardButton(text="Socials", callback_data=scan_menu_data("socials", address)),
                 InlineKeyboardButton(text="Trade", callback_data=scan_menu_data("trade", address)),
+                InlineKeyboardButton(text="Intel", callback_data=scan_menu_data("intel", address)),
             ]
         )
         add_back_row(rows, address)
@@ -1974,19 +2003,8 @@ def scan_links_keyboard(token, rug=None, menu: str = "main") -> InlineKeyboardMa
     rows.append(
         [
             InlineKeyboardButton(text="Refresh", callback_data=scan_menu_data("refresh", address)),
-            InlineKeyboardButton(text="Details DM", callback_data=scan_menu_data("dm", address)),
-        ]
-    )
-    rows.append(
-        [
-            InlineKeyboardButton(text="Dexscreener", url=token.pair_url or f"https://dexscreener.com/solana/{address}"),
-            InlineKeyboardButton(text="Chart", callback_data=scan_menu_data("chartimg", address)),
-            InlineKeyboardButton(text="Trade", callback_data=scan_menu_data("trade", address)),
-        ]
-    )
-    rows.append(
-        [
-            InlineKeyboardButton(text="Links", callback_data=scan_menu_data("links", address)),
+            InlineKeyboardButton(text="Menu", callback_data=scan_menu_data("links", address)),
+            InlineKeyboardButton(text="DM", callback_data=scan_menu_data("dm", address)),
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -1997,7 +2015,7 @@ def scan_menu_data(menu: str, address: str) -> str:
 
 
 def add_back_row(rows: list[list[InlineKeyboardButton]], address: str) -> None:
-    rows.append([InlineKeyboardButton(text="← Back", callback_data=scan_menu_data("main", address))])
+    rows.append([InlineKeyboardButton(text="< Back", callback_data=scan_menu_data("main", address))])
 
 
 def dev_wallet_url(rug) -> str | None:
