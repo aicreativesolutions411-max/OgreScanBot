@@ -110,7 +110,7 @@ def format_scan_caption(
     elif token.dex_id and token.dex_id != "?":
         status_bits.append(f"#{html.escape(token.dex_id.upper())}")
     status = " • ".join(status_bits) if status_bits else "#SOL"
-    call_line = compact_call_line(call, caller, is_new_call, token.cap_for_tracking)
+    call_line = scan_call_footer(call, caller, is_new_call, token.cap_for_tracking)
     headline = html.escape(
         f"{token.name} (${token.symbol})"
         if token.symbol and token.symbol != "?"
@@ -120,8 +120,7 @@ def format_scan_caption(
         f"🦅 <b>{headline}</b> • {status}\n"
         f"{ca_click_link(token, full=True)}\n"
         f"└ #SOL • {html.escape(token.dex_id)} • {age_from_ms(token.created_at_ms)}"
-        f"{migration_line_suffix(token, is_migrated)}\n"
-        f"{call_line}\n\n"
+        f"{migration_line_suffix(token, is_migrated)}\n\n"
         f"📊 <b>Stats</b>\n"
         f"├ USD <b>{price(token.price_usd)}</b> ({pct(token.price_change_h24)}) | MC <b>{money(token.market_cap or token.fdv)}</b>\n"
         f"├ Vol <b>{money(token.volume_h24)}</b> | LP <b>{money(token.liquidity_usd)}</b>\n"
@@ -135,6 +134,7 @@ def format_scan_caption(
         f"🔗 <b>Socials</b> {scan_social_links(token)}\n"
         f"🔎 <b>X</b> {scan_x_links(token)}\n\n"
         f"🔎 <b>Links</b>\n{scan_tool_links(token)}"
+        f"\n\n{call_line}"
         f"{powered_by_footer()}"
     )
 
@@ -1151,14 +1151,14 @@ def dexscreener_url(token: TokenScan) -> str:
     return html.escape(token.pair_url or f"https://dexscreener.com/solana/{token.address}")
 
 
-def compact_call_line(
+def scan_call_footer(
     call: CallRecord | None,
     caller: str,
     is_new_call: bool,
     current_cap: float | None,
 ) -> str:
     if not call:
-        return f"➰ Posted by {caller} • tracking starts when MC is available"
+        return f"📣 <b>Call</b>\n└ Posted by {caller} • tracking starts when MC is available"
 
     age = short_duration(max(0, int(time.time()) - call.created_at))
     initial = money(call.initial_cap)
@@ -1166,9 +1166,20 @@ def compact_call_line(
     current_x = (current / call.initial_cap) if call.initial_cap and current else current_multiple(call)
     pct_text = multiple_pct(current_x)
     x_text = f"{current_x:.2f}x" if current_x is not None else "n/a"
-    if is_new_call:
-        return f"➰ {caller} @ {initial} [new call] ({age})"
-    return f"➰ {caller} @ {initial} [{pct_text} | {x_text}] ({age})"
+    if current_x is None:
+        direction = "tracking"
+    elif current_x > 1:
+        direction = "up"
+    elif current_x < 1:
+        direction = "down"
+    else:
+        direction = "flat"
+    status = "new call • " if is_new_call else ""
+    return (
+        f"📣 <b>Call</b>\n"
+        f"└ {status}{caller} called @ <b>{initial}</b> • {direction} "
+        f"<b>{pct_text}</b> | <b>{x_text}</b> ({age})"
+    )
 
 
 def compact_chart_links(token: TokenScan) -> str:

@@ -30,7 +30,7 @@ Solana-first Telegram scanner bot using free/public data sources.
 - Verifies token supply and top-holder concentration directly through Solana RPC when enabled.
 - Adds an Explain button on every scan for a quick human-readable token risk read using free scan and RugCheck data.
 - Adds Smart Token Intelligence: explain modes, paid trend check, cautious wallet cluster read, and explain-my-loss views.
-- Group scan captions now use a public Phanes/Rick-style info box: token, CA, first caller entry, current X/loss, stats, ATH, audit/security, socials, and branded footer.
+- Group scan captions now use a public Phanes/Rick-style info box: token, CA, stats, ATH, audit/security, socials, and a bottom call footer showing who called it, called-at MC, current percent move, and current X/loss.
 - Bulky scan details are available through the scan `DM` button instead of expanding inside group chat.
 - Scan posts include a `Refresh` button that edits the existing post with current MC, caller X/loss, paid status, and migration state.
 - Pump tokens now show bonding progress in the scan when available, and graduated Pump.fun tokens show `MIGRATED` once free Pump/Dex data confirms completion or a migrated pool such as PumpSwap/Raydium/Meteora.
