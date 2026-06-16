@@ -112,11 +112,24 @@ def _has_url(items: list[dict[str, Any]], url: str) -> bool:
 
 
 def pump_is_complete(pump: dict[str, Any]) -> bool | None:
-    for key in ("complete", "graduated", "migrated"):
+    for key in ("complete", "graduated", "migrated", "is_complete", "isComplete"):
         value = pump.get(key)
         if isinstance(value, bool):
             return value
-    if pump.get("raydium_pool") or pump.get("raydiumPool") or pump.get("pool"):
+    pool_keys = (
+        "pump_swap_pool",
+        "pumpSwapPool",
+        "pumpswap_pool",
+        "pumpSwapPoolAddress",
+        "raydium_pool",
+        "raydiumPool",
+        "raydiumPoolAddress",
+        "pool",
+        "poolAddress",
+        "amm_pool",
+        "ammPool",
+    )
+    if any(_clean_string(pump.get(key)) for key in pool_keys):
         return True
     return False if pump else None
 

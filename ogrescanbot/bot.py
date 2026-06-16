@@ -537,7 +537,7 @@ class OgreScanApp:
                         migration_event=migration_event,
                         migrated=token_is_migrated(token),
                     ),
-                    limit=850,
+                    limit=1000,
                 )
                 markup = scan_links_keyboard(token, rug)
                 if getattr(callback.message, "photo", None):
@@ -780,7 +780,7 @@ class OgreScanApp:
                 migration_event=migration_event,
                 migrated=token_is_migrated(token),
             ),
-            limit=850,
+            limit=1000,
         )
         banner = await self.build_scan_photo(token)
         links = scan_links_keyboard(token, rug)
@@ -824,32 +824,45 @@ class OgreScanApp:
             )
 
     async def update_migration_state(self, chat_id: int, token) -> bool:
-        current = "migrated" if token_is_migrated(token) else "bonding"
+        current = token_migration_state(token)
         key = migration_setting_key(chat_id, token.address)
         previous = await self.db.get_setting(key)
         await self.db.set_setting(key, current)
-        return bool(previous and previous != "migrated" and current == "migrated")
+        return bool(previous == "bonding" and current == "migrated")
 
     async def send_migration_alert(self, chat_id: int, token, call) -> None:
         rug = await self.safe_rug_summary(token.address)
         rug = await self.enrich_security_data(token, rug)
-        text = format_scan_caption(
-            token,
-            call,
-            False,
-            rug,
-            migration_event=True,
-            migrated=True,
+        text = photo_caption(
+            format_scan_caption(
+                token,
+                call,
+                False,
+                rug,
+                migration_event=True,
+                migrated=True,
+            ),
+            limit=1000,
         )
         try:
-            await self.bot.send_message(
+            banner = await self.build_scan_photo(token)
+            await self.bot.send_photo(
                 chat_id,
-                text,
+                banner,
+                caption=text,
                 reply_markup=scan_links_keyboard(token, rug),
-                disable_web_page_preview=True,
             )
         except Exception:
-            logging.exception("Migration alert failed for %s", token.address)
+            logging.exception("Migration photo alert failed for %s; retrying as text.", token.address)
+            try:
+                await self.bot.send_message(
+                    chat_id,
+                    text,
+                    reply_markup=scan_links_keyboard(token, rug),
+                    disable_web_page_preview=True,
+                )
+            except Exception:
+                logging.exception("Migration alert failed for %s", token.address)
 
     async def build_scan_photo(self, token) -> BufferedInputFile:
         source = None
@@ -1706,15 +1719,43 @@ def strict_scan_rejection(token, rug, auto: bool = False) -> str | None:
     return None
 
 
+def token_migration_state(token) -> str:
+    if token_is_migrated(token):
+        return "migrated"
+    if token_is_pump_origin(token):
+        return "bonding"
+    return "unknown"
+
+
 def token_is_migrated(token) -> bool:
     if getattr(token, "is_pump_complete", None) is True:
         return True
     dex_id = str(getattr(token, "dex_id", "") or "").strip().lower()
     address = str(getattr(token, "address", "") or "")
     has_pair = bool(getattr(token, "pair_address", "") or "")
-    if address.endswith("pump") and has_pair and dex_id not in {"", "?", "pump"}:
+    migrated_dexes = {
+        "pumpswap",
+        "pump-swap",
+        "raydium",
+        "raydium-clmm",
+        "meteora",
+        "meteora-dlmm",
+        "orca",
+        "lifinity",
+    }
+    bonding_dexes = {"", "?", "pump", "pumpfun", "pump.fun"}
+    if address.endswith("pump") and has_pair and dex_id in migrated_dexes:
+        return True
+    if address.endswith("pump") and has_pair and dex_id not in bonding_dexes and getattr(token, "liquidity_usd", None):
         return True
     return False
+
+
+def token_is_pump_origin(token) -> bool:
+    if str(getattr(token, "address", "") or "").endswith("pump"):
+        return True
+    dex_id = str(getattr(token, "dex_id", "") or "").strip().lower()
+    return dex_id in {"pump", "pumpfun", "pump.fun", "pumpswap", "pump-swap"}
 
 
 def migration_setting_key(chat_id: int, address: str) -> str:
@@ -2066,7 +2107,7 @@ def is_backup_command(text: str) -> bool:
     } or command.startswith("/setbackup@") or command.startswith("/backuphere@")
 
 
-def photo_caption(text: str, limit: int = 850) -> str:
+def photo_caption(text: str, limit: int = 1000) -> str:
     if len(text) <= limit:
         return text
 
@@ -2076,6 +2117,7 @@ def photo_caption(text: str, limit: int = 850) -> str:
 
     removable_sections = [
         "🔎 <b>Links</b>",
+        "🔎 <b>X</b>",
         "🔗 <b>Socials</b>",
         "🔎 <b>X Posts</b>",
         "🧾 <b>Info</b>",

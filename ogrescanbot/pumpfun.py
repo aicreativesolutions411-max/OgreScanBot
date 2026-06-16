@@ -112,14 +112,27 @@ class PumpFunClient:
             websites.append({"label": "Web", "url": data.get("website")})
 
         cap = _float_or_none(data.get("usd_market_cap")) or _float_or_none(data.get("market_cap"))
+        complete = pump_is_complete(data)
+        pool = _first_string(
+            data,
+            "pump_swap_pool",
+            "pumpSwapPool",
+            "pumpswap_pool",
+            "pumpSwapPoolAddress",
+            "raydium_pool",
+            "raydiumPool",
+            "raydiumPoolAddress",
+            "pool",
+            "poolAddress",
+        )
         return TokenScan(
             address=str(data.get("mint") or mint),
             name=str(data.get("name") or "Unknown"),
             symbol=str(data.get("symbol") or "?"),
             chain_id="solana",
-            dex_id="pump",
-            pair_address="",
-            pair_url=f"https://pump.fun/coin/{mint}",
+            dex_id="pumpswap" if complete and pool else "pump",
+            pair_address=pool or "",
+            pair_url=f"https://dexscreener.com/solana/{pool}" if complete and pool else f"https://pump.fun/coin/{mint}",
             price_usd=None,
             market_cap=cap,
             fdv=cap,
@@ -137,7 +150,7 @@ class PumpFunClient:
             websites=websites,
             raw_pair=data,
             bonding_progress_pct=pump_bonding_progress_pct(data, cap),
-            is_pump_complete=pump_is_complete(data),
+            is_pump_complete=complete,
             dex_paid=False,
         )
 
@@ -167,6 +180,14 @@ def _string_or_none(value: object) -> str | None:
     return text or None
 
 
+def _first_string(data: dict, *keys: str) -> str | None:
+    for key in keys:
+        value = _string_or_none(data.get(key))
+        if value:
+            return value
+    return None
+
+
 def _items_from_search_response(data: object) -> list[dict]:
     if isinstance(data, list):
         return [item for item in data if isinstance(item, dict)]
@@ -188,9 +209,18 @@ def _pump_score(item: dict) -> float:
         or 0
     )
     score = cap + (liquidity * 10)
-    if item.get("complete"):
+    if item.get("complete") or item.get("graduated") or item.get("migrated"):
         score += 5_000
-    if item.get("raydium_pool") or item.get("pump_swap_pool"):
+    if _first_string(
+        item,
+        "pump_swap_pool",
+        "pumpSwapPool",
+        "pumpswap_pool",
+        "raydium_pool",
+        "raydiumPool",
+        "pool",
+        "poolAddress",
+    ):
         score += 2_500
     if item.get("twitter") or item.get("telegram") or item.get("website"):
         score += 1_000

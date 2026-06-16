@@ -96,24 +96,45 @@ def format_scan_caption(
 ) -> str:
     caller = caller_profile_link(call) if call else telegram_user_link(posted_user_id, posted_name)
     status_bits = []
+    is_migrated = bool(migration_event or migrated)
     if migration_event:
         status_bits.append("MIGRATED")
     elif migrated:
         status_bits.append("MIGRATED")
+    else:
+        stage = pump_stage_status(token)
+        if stage:
+            status_bits.append(stage)
     if token.dex_paid:
         status_bits.append("#DEXPAID")
     elif token.dex_id and token.dex_id != "?":
         status_bits.append(f"#{html.escape(token.dex_id.upper())}")
     status = " • ".join(status_bits) if status_bits else "#SOL"
     call_line = compact_call_line(call, caller, is_new_call, token.cap_for_tracking)
-    headline_symbol = html.escape(token.symbol if token.symbol and token.symbol != "?" else token.name)
+    headline = html.escape(
+        f"{token.name} (${token.symbol})"
+        if token.symbol and token.symbol != "?"
+        else token.name
+    )
     return (
-        f"🦅 <b>{headline_symbol}</b> • {status}\n"
-        f"➰ MC: <b>{money(token.market_cap or token.fdv)}</b> • Age: {age_from_ms(token.created_at_ms)}\n"
+        f"🦅 <b>{headline}</b> • {status}\n"
+        f"{ca_click_link(token, full=True)}\n"
+        f"└ #SOL • {html.escape(token.dex_id)} • {age_from_ms(token.created_at_ms)}"
+        f"{migration_line_suffix(token, is_migrated)}\n"
         f"{call_line}\n\n"
-        f"{ca_click_link(token, full=True)}\n\n"
-        f"{compact_chart_links(token)}\n\n"
-        f"{compact_trade_links(token)}"
+        f"📊 <b>Stats</b>\n"
+        f"├ USD <b>{price(token.price_usd)}</b> ({pct(token.price_change_h24)}) | MC <b>{money(token.market_cap or token.fdv)}</b>\n"
+        f"├ Vol <b>{money(token.volume_h24)}</b> | LP <b>{money(token.liquidity_usd)}</b>\n"
+        f"├ 1H <b>{pct(token.price_change_h1)}</b> B{token.buys_h1 or 0}/S{token.sells_h1 or 0}\n"
+        f"└ ATH <b>{token_ath_value(token, call)}</b>\n\n"
+        f"🔒 <b>Audit {audit_badge(rug)}</b>\n"
+        f"├ DEX {dex_paid_link(token)} | Dev {dev_sold_link(rug)}\n"
+        f"├ Top 10 <b>{rug_top_10_holders(rug)}</b>\n"
+        f"└ Mint <b>{authority_bracket(rug.mint_authority if rug else None, rug is not None)}</b> | "
+        f"Freeze <b>{authority_bracket(rug.freeze_authority if rug else None, rug is not None)}</b>\n\n"
+        f"🔗 <b>Socials</b> {scan_social_links(token)}\n"
+        f"🔎 <b>X</b> {scan_x_links(token)}\n\n"
+        f"🔎 <b>Links</b>\n{scan_tool_links(token)}"
         f"{powered_by_footer()}"
     )
 
@@ -514,6 +535,33 @@ def token_ath_value(token: TokenScan, call: CallRecord | None = None) -> str:
     if token.cap_for_tracking:
         return f"{money(token.cap_for_tracking)} (current)"
     return "n/a"
+
+
+def pump_stage_status(token: TokenScan) -> str:
+    if not token_is_pump_origin(token):
+        return ""
+    progress = token.bonding_progress_pct
+    if progress is not None:
+        return f"Pump {max(0, min(100, progress)):.0f}%"
+    return "Pump"
+
+
+def migration_line_suffix(token: TokenScan, migrated: bool) -> str:
+    if migrated:
+        return " • MIGRATED"
+    if not token_is_pump_origin(token):
+        return ""
+    progress = token.bonding_progress_pct
+    if progress is None:
+        return " • Pump"
+    return f" • Pump {max(0, min(100, progress)):.0f}%"
+
+
+def token_is_pump_origin(token: TokenScan) -> bool:
+    if str(token.address or "").endswith("pump"):
+        return True
+    dex_id = str(token.dex_id or "").strip().lower()
+    return dex_id in {"pump", "pumpfun", "pump.fun", "pumpswap", "pump-swap"}
 
 
 def current_multiple(call: CallRecord | None) -> float | None:
